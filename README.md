@@ -1,4 +1,4 @@
-# Mother Orchestrator
+# Mother-runtime by TFRI
 
 A Rust runtime for persistent engineering context across coding assistants.
 
