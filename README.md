@@ -1,94 +1,88 @@
-# Mother-runtime by TFRI
+# Mother Runtime
 
-A Rust runtime for persistent engineering context across coding assistants.
+**By TFRI**
 
-Mother keeps canonical project state in a local SQLite database owned by one
-foreground service. Independent CLI processes share that service over a Unix
-socket. This initial implementation provides project registration, context
-records, structured decisions with supersession, hashed handoff packages, one-time
-continuation claims, durable host-tracked tasks/checkpoints, runtime file evidence,
-revision checks, idempotent writes, diagnostics, and an
-official Rust SDK MCP stdio bridge.
+*A persistent engineering control plane for AI coding agents.*
 
-Personas, independent workers, GitHub operations, and the TUI are subsequent
-milestones. Two MCP protocol lifecycles are tested with SDK clients; interactive
-coding-assistant sessions are not yet certified. See
-[development status](development-status.toml) and [roadmap](docs/ROADMAP.md).
+Mother Runtime is an open-source, Rust-native orchestration system designed to coordinate engineering work across AI coding assistants, agent personas, and independently authorized GitHub identities.
 
-## Build and run
+Its goal is to make AI-assisted software development continuous, governable, and accountable—even when developers switch between Codex, Claude Code, GitHub Copilot, or other supported coding tools.
 
-Requires Rust 1.97 or newer and a C compiler for bundled SQLite. macOS is tested
-locally; Linux is included in CI but has not yet been executed in this workspace.
+**The project remembers. The agents execute.**
 
-```sh
-cargo build --workspace --locked
-cargo install --path crates/mother --locked
-motherctl init
-motherctl serve
-```
+## Why Mother exists
 
-In a second terminal:
+Coding assistants are typically organized around individual sessions. Projects, however, continue across sessions, tools, contributors, and engineering decisions.
 
-```sh
-motherctl doctor
-motherctl projects attach --name example --repository /absolute/path/to/project
-motherctl projects list
-```
+Mother is designed to provide a durable coordination layer that preserves:
 
-Use the returned project ID to record and retrieve context:
+- Project state, technical context, and architectural decisions.
+- Engineering responsibilities and versioned agent configurations.
+- Task ownership, dependencies, checkpoints, and execution history.
+- Verified deliverables, GitHub artifacts, and review outcomes.
+- Context needed to continue work through a different coding assistant.
 
-```sh
-motherctl --request-id initial-objective context record \
-  --project PROJECT_ID --kind objective \
-  --content 'Implement the authentication API' --source human \
-  --expected-revision 1
-motherctl context get --project PROJECT_ID
-motherctl history --project PROJECT_ID
-```
+Mother is not intended to replace existing coding agents or become another general-purpose conversational memory tool.
 
-Record decisions with `motherctl decisions record`. Create a continuation package
-with `motherctl handoff create --file handoff.json`, using the
-[example submission](examples/handoff.json). A later session can list, show, and
-claim it once. See [continuity semantics](docs/CONTINUITY.md) for revisions, snapshot
-limits, and the distinction between recorded state and unverified progress claims.
+Its long-term purpose is to coordinate what agents are responsible for, what they are authorized to do, what work has been verified, and what should happen next.
 
-Track local work with `motherctl tasks create --file task.json`, using the
-[example contract](examples/task.json). Tasks have explicit states, checkpoints,
-dependency checks, and bounded runtime file observations. Local completion proves
-only the declared file contract, not test success or software correctness. See
-[task and evidence semantics](docs/ORCHESTRATION.md).
+## Current development status
 
-Stop the service with Ctrl-C or SIGTERM. Restart `motherctl serve` and query the
-same project to recover its records. A directory can be attached before Git is
-initialized; registration does not verify a remote repository or Git identity.
+**Early development — persistent runtime foundation implemented; governed agent orchestration remains in development.**
 
-Schema 3 migrates existing schema-1/2 state transactionally on `init` or `serve`.
-Stop the old service and all bridges before upgrading binaries, then restart them.
+The current implementation includes:
 
-State defaults to `~/.mother`. Override it on **every command** with
-`--data-dir /short/absolute/path`. The data directory must be owned by the current
-user and private (0700). Runtime/configuration/database files are private (0600).
-The socket path must fit within 100 bytes. Run on a local filesystem.
+- A canonical local SQLite database owned by a foreground Rust service.
+- Shared service access from independent CLI processes through a Unix socket.
+- Project registration and persistent context records.
+- Structured engineering decisions with supersession.
+- Hashed handoff packages and one-time continuation claims.
+- Durable host-tracked tasks and checkpoints.
+- Runtime file evidence.
+- Revision checks and idempotent writes.
+- Runtime diagnostics.
+- An MCP stdio bridge implemented using the official Rust SDK.
 
-Default command output is indented JSON; `--json` emits compact JSON. Errors exit
-with a nonzero status. `doctor` reports a stopped runtime as an unhealthy check,
-while still reporting configuration and database checks separately.
+Two MCP protocol lifecycles have been tested using SDK clients.
 
-## Verification
+Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
 
-```sh
-cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-```
+## Planned orchestration capabilities
 
-For assistant connections, launch `motherctl mcp` as a stdio server against the
-same state directory. The canonical `serve` process must already be running. See
-[MCP tools and opt-in host configuration examples](docs/MCP.md).
+Mother's next engineering milestones include:
 
-See [CLI usage](docs/CLI.md), [architecture](docs/ARCHITECTURE.md),
-[security boundaries](docs/SECURITY.md), and [test evidence](docs/TESTING.md).
+**Persistent personas:** Configurable engineering roles with versioned responsibilities, permissions, instructions, and execution policies.
 
-Licensed under the [Apache License, Version 2.0](LICENSE) (`Apache-2.0`).
-Third-party dependencies retain their own licenses and notices; see
-[licensing](docs/LICENSING.md) and [publication policy](docs/PUBLISHING.md).
+**Cross-assistant continuity:** Verified retrieval and continuation of engineering state across supported coding clients.
+
+**GitHub identities:** Separate GitHub user accounts, explicitly authorized by their legitimate owners and associated with configured engineering personas.
+
+**Independent workers:** Specialized coding agents operating through supported provider runtimes and isolated execution environments.
+
+**Governed engineering workflows:** Assignment, implementation, validation, independent review, and human-controlled merging through GitHub.
+
+**Terminal interface:** A Rust-native CLI and interactive TUI for managing personas, projects, tasks, accounts, and execution history.
+
+## Architectural principles
+
+- **Provider-independent:** Coding assistants are interchangeable clients, not owners of canonical project state.
+- **Local-first:** Project coordination state is controlled by the local runtime.
+- **Persistent:** Tasks, decisions, and handoffs survive ordinary session termination.
+- **Policy-governed:** Operational permissions must be enforced by the runtime, not merely described in prompts.
+- **Identity-aware:** Automated GitHub actions must be attributable to the correctly authorized account.
+- **Evidence-based:** Completion claims should be supported by verifiable artifacts.
+- **Rust-native:** Core execution, persistence, orchestration, and terminal interfaces are implemented in Rust.
+
+## Project maturity
+
+Mother Runtime is under active development and is not yet a production-ready autonomous engineering orchestrator.
+
+The current foundation should not be interpreted as proof that independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available.
+
+See the development status, architecture, security documentation, and roadmap for verified capabilities and ongoing work.
+
+## Open source
+
+Mother Runtime is developed by **TFRI**.
+
+License: Apache-2.0, subject to the repository containing the corresponding license and package metadata.
