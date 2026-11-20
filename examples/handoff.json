@@ -1,0 +1,20 @@
+{
+  "project_id": "PROJECT_ID",
+  "task_id": null,
+  "objective": "Finish the authentication API",
+  "source": "engineering-session",
+  "originating_host": "local-assistant",
+  "originating_session": null,
+  "work_completed": ["Drafted API request and response types"],
+  "work_remaining": ["Implement validation and rerun authentication tests"],
+  "changed_files": ["src/auth.rs"],
+  "git_references": [],
+  "test_results": ["Authentication test failed: error contract unresolved"],
+  "blockers": ["API error response contract needs a decision"],
+  "unresolved_questions": ["Which error format should the endpoint return?"],
+  "hypotheses": ["A shared error type may resolve the failing test"],
+  "provenance_references": [],
+  "next_action": "Resolve the error contract, then rerun authentication tests",
+  "expected_recipient": "continuing-assistant",
+  "expected_revision": null
+}

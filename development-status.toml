@@ -1,0 +1,114 @@
+format_version = 1
+updated_on = "2026-11-20"
+directive = "MOTHER.md"
+milestone = "Durable host-tracked tasks, checkpoints, bounded file-contract evidence, and task-aware handoffs"
+next_objective = "Implement versioned persona definitions and runtime-enforced live capabilities with stale-policy rejection across clients"
+
+[implemented]
+cargo_workspace = true
+motherctl_cli = true
+strict_versioned_toml = true
+structured_errors_and_logging = true
+sqlite_migrations_v1_v2_v3 = true
+host_tracked_task_contracts = true
+explicit_task_state_machine = true
+immutable_task_checkpoints_and_transition_history = true
+same_project_dag_dependencies = true
+mandatory_task_revision_checks = true
+bounded_repository_file_observations = true
+fresh_file_evidence_completion_gate = true
+review_required_completion_blocked_without_verifier = true
+task_aware_handoff_snapshot_v2 = true
+item_and_byte_bounded_list_pages = true
+atomic_pending_migrations = true
+structured_decisions_and_explicit_supersession = true
+active_decisions_in_live_context = true
+bounded_project_continuation_snapshots = true
+immutable_sha256_handoff_packages = true
+one_time_handoff_claims_with_stale_state_rejection = true
+continuity_cli_and_mcp = true
+single_writer_runtime_lock = true
+private_unix_socket_ipc = true
+foreground_service_and_signal_shutdown = true
+project_registration = true
+bounded_project_context_and_event_reads = true
+project_revisions_and_optimistic_writes = true
+transactional_events_and_idempotency = true
+doctor_integrity_and_health_checks = true
+machine_readable_development_status = true
+mcp_stdio_bridge = true
+mcp_typed_inputs_and_response_envelope_schema = true
+mcp_project_context_health_and_activity_tools = true
+mcp_revision_bearing_resources = true
+project_lookup_by_id = true
+host_configuration_examples = true
+
+[verification]
+platform = "macOS"
+rustc = "1.97.1"
+unit_tests = 17
+process_integration_tests = 8
+format_check_passed = true
+strict_clippy_passed = true
+workspace_tests_passed = true
+commands = ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets --locked -- -D warnings", "cargo test --workspace --locked"]
+coverage = [
+  "Eight concurrent independent CLI writers share one runtime",
+  "Project/context state and retry responses survive actual process kill/restart",
+  "State, revision, retry key, and event roll back on injected transaction failure",
+  "Idempotent replay, payload conflicts, stale revision rejection, pagination",
+  "Single-writer lock, graceful termination, stale socket recovery",
+  "Malformed and oversized IPC, protocol/config/schema validation",
+  "Private directory/socket checks, symlink rejection, append-only events",
+  "doctor reports absent state without initializing it",
+  "Two real SDK MCP clients launch separate stdio bridges sharing live CLI/runtime state",
+  "MCP schemas, tools, resources, structured errors, pagination, and required retry keys",
+  "Connected MCP clients recover after runtime kill/restart; new sessions retrieve persisted revision",
+  "MCP bridge never initializes state and fatal initialization errors leave stdout clean",
+  "Schema-1 migration preserves records and retry responses; failed migration DDL rolls back",
+  "Scoped decision supersession excludes historical records from live context and rolls back on failed audit",
+  "Bounded snapshots with escaped text, immutable package bytes, SHA-256 verification and corruption detection",
+  "Another MCP client recovers handoff claims/failures/blockers/provenance after runtime restart",
+  "Concurrent handoff resume commits one claim, rejects stale state, and replays its exact key after restart",
+  "Handoff creation and claim audit failures roll back all state",
+  "Host-tracked tasks and failed checkpoints recover through a different MCP client after restart",
+  "Competing task revisions commit one transition; exact completion replay works across CLI/MCP after restart",
+  "Completion rejects absent/stale/mismatched/modified file evidence and review-required tasks",
+  "Cross-project dependencies and task-focused handoffs reject wrong scope",
+  "Repository path traversal, symlink/hardlink/FIFO rejection, file and aggregate read caps",
+  "Task creation/checkpoint/transition audit failures roll back all state and retry keys",
+  "Schema-2 handoff bytes and retry payloads survive schema-3 migration; failed migration rolls back",
+  "Byte-bounded context pages recover all records without cursor gaps",
+]
+hosted_ci_executed = false
+linux_executed = false
+mcp_client_tested = true
+mcp_sdk_version = "3.11.0"
+mcp_protocols_tested = ["2025-11-25", "2026-07-28"]
+interactive_host_tested = false
+real_provider_tested = false
+real_github_tested = false
+representative_performance_measured = false
+
+[remaining]
+phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
+phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona MCP tools after registry implementation", "Per-operation typed result schemas beyond the response envelope"]
+phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling"]
+later = ["Live persona policies", "Authorized GitHub identities", "Durable task scheduling", "Coding-agent adapter", "GitHub workflow", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
+
+[limitations]
+trust_boundary = "Same OS user; all current clients have local operator authority"
+context_trust = "Submitted summaries, objectives, labels, tests and references remain unverified; task file observations alone are runtime-generated"
+task_completion = "Declared local file contract only; no test execution, independent review, human approval or general correctness verification"
+file_observations = "Point-in-time individual files, not an atomic filesystem snapshot or hostile same-UID sandbox"
+handoff_resume = "Local operator coordination claim only; no execution, authority grant, lease, or reassignment"
+snapshot_scopes = "Project, context, decisions, host-tracked tasks and latest checkpoints; persona/policy/verified Git scopes unavailable"
+secret_redaction = false
+encryption_at_rest = false
+network_filesystems_supported = false
+mcp_implemented = true
+persona_authorization_implemented = false
+workers_implemented = false
+github_authentication_implemented = false
+remote_writes_performed = false
+license = "Apache-2.0"

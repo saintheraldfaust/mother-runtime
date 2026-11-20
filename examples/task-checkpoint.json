@@ -1,0 +1,10 @@
+{
+  "task_id": "TASK_ID",
+  "summary": "Recorded the current README artifact",
+  "source": "cli-session",
+  "work_remaining": [],
+  "blockers": [],
+  "reported_test_results": ["No test execution was verified by Mother"],
+  "expected_task_revision": 1,
+  "expected_project_revision": null
+}

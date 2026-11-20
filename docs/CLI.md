@@ -1,0 +1,66 @@
+# CLI reference
+
+Global flags: `--data-dir PATH`, `--json`, `--request-id KEY`.
+Default output is indented JSON; `--json` is compact. The request ID flag is
+intended for mutations. Only exact successful mutation replays are cached.
+
+| Command | Behavior |
+| --- | --- |
+| `init` | Create configuration, initialize/migrate the database offline. Repeatable. |
+| `mcp` | Serve MCP stdio; forward operations to the existing runtime, without opening SQLite. |
+| `serve` | Hold the writer lock and run the foreground local service. |
+| `doctor` | Report private-directory, configuration, schema/integrity, and runtime health. |
+| `status` | Retrieve health from the running service. |
+| `projects attach --name NAME --repository PATH` | Register a canonical directory, revision 1. |
+| `projects inspect --project ID` | Retrieve canonical project metadata and current revision. |
+| `projects list [--after N] [--limit N]` | Page through registered projects. |
+| `context record --project ID --kind KIND --content TEXT --source SOURCE [--expected-revision N]` | Atomically append context, revision, event, retry response. |
+| `context get --project ID [--after N] [--limit N]` | Retrieve a page of context and current revision. |
+| `decisions record --project ID --title TITLE --decision TEXT --rationale TEXT --source SOURCE [--alternative TEXT] [--supersedes ID] [--expected-revision N]` | Record a decision and optionally replace one active decision in the same project. |
+| `decisions list --project ID [--include-superseded] [--after N] [--limit N]` | List active decisions by default. |
+| `decisions inspect --decision ID` | Read a decision, supersession links and current project revision. |
+| `handoff create --file FILE` | Capture a submitted JSON summary and immutable bounded runtime snapshot. |
+| `handoff list --project ID [--after N] [--limit N]` | Discover handoff metadata. |
+| `handoff show --handoff ID` | Read exact package bytes, SHA-256, live revision and claim status. |
+| `handoff resume --handoff ID --recipient LABEL --expected-revision N` | Claim an unchanged, unclaimed package once; does not start execution. |
+| `tasks create --file FILE` | Create a host-tracked task from a bounded JSON file contract. |
+| `tasks inspect --task ID` | Retrieve task revisions, dependencies, latest checkpoint/transition, and evidence. |
+| `tasks list --project ID [--state STATE] [--after N] [--limit N]` | Page through task summaries. |
+| `tasks transition --task ID --state STATE --source SOURCE --reason TEXT --expected-task-revision N [--owner-label LABEL] [--expected-project-revision N]` | Apply an allowed state transition with evidence/dependency gates. |
+| `tasks checkpoint --file FILE` | Persist progress and runtime observations of the task contract files. |
+| `tasks checkpoints --task ID [--after N] [--limit N]` | Retrieve immutable checkpoint history. |
+| `tasks history --task ID [--after N] [--limit N]` | Retrieve transition reasons, sources and revisions. |
+| `history [--project ID] [--after N] [--limit N]` | Retrieve committed events, optionally project-scoped. |
+
+Kinds: `fact`, `observation`, `failure`, `blocker`, `objective`. All are unverified
+submissions. The kind does not imply authorization or evidence.
+
+IPC-backed commands return `{version, request_id, result}` or
+`{version, request_id, error: {code, message}}`. Expected domain errors have codes
+`invalid_request`, `not_found`, `conflict`, or `integrity_error`; unexpected storage failures return
+`internal_error` without request contents. Pre-IPC failures return `command_failed`.
+`init` and `doctor` return command-specific diagnostic objects. Clap syntax errors
+use its standard stderr output and exit status 2. All operational failures exit 1.
+
+`doctor` exits 1 if the service is stopped, even if offline checks pass. It does
+not fix permissions or create a missing database. `init` refuses to run against
+an active runtime. Use SIGINT/Ctrl-C or SIGTERM for graceful shutdown. There is
+no background installation, auto-start, or `launchd` integration yet.
+
+
+`mcp` reserves stdout exclusively for MCP JSON-RPC messages, including when
+initialization fails. Its diagnostics go to stderr. Global `--json` and
+`--request-id` do not change MCP transport behavior; mutations supply their retry
+key in tool arguments. See [MCP usage and schemas](MCP.md).
+
+Use explicit `--request-id` keys for decision/handoff mutations when reliable retry
+is needed. `handoff create` accepts [this JSON shape](../examples/handoff.json);
+replace its project ID before use. Use the handoff creation revision as the resume
+expected revision while the project is unchanged. See [continuity semantics](CONTINUITY.md).
+
+Task input and checkpoint examples are in [task.json](../examples/task.json) and
+[task-checkpoint.json](../examples/task-checkpoint.json). Task state values use
+hyphens in CLI flags and underscores in JSON. All task mutations use the same
+retry-key namespace as other writes. Lists may return fewer than the requested
+items due to the serialized-byte budget; follow `next_cursor` until null. See
+[task semantics](ORCHESTRATION.md), especially the limited file-completion scope.

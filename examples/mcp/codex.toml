@@ -1,0 +1,4 @@
+# Review and replace both absolute paths before merging into a host configuration.
+[mcp_servers.mother]
+command = "/absolute/path/to/motherctl"
+args = ["--data-dir", "/absolute/path/to/state", "mcp"]

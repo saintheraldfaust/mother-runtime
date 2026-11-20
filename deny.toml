@@ -1,0 +1,21 @@
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+unmaintained = "all"
+# Owner-approved 2026-11-20; INFO maintenance notice, not a vulnerability waiver.
+# rmcp 3.11.0 and its schema feature require chrono; no patched release exists.
+# Reevaluate replacement/upstream support before this exception expires.
+ignore = [{ id = "RUSTSEC-2026-0543", reason = "Owner approved temporary chrono maintenance exception for official rmcp 3.11; track upstream replacement", expiry = "2026-12-20" }]
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Zlib"]
+confidence-threshold = 0.95
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

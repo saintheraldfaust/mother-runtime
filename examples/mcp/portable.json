@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mother": {
+      "type": "stdio",
+      "command": "/absolute/path/to/motherctl",
+      "args": ["--data-dir", "/absolute/path/to/state", "mcp"]
+    }
+  }
+}
