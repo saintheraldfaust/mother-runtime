@@ -1,4 +1,5 @@
 use crate::continuity::{DecisionInput, HandoffInput};
+use crate::personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate};
 use crate::tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,23 @@ pub enum Operation {
         after: u64,
         limit: u32,
     },
+    PersonaCreate(PersonaInput),
+    PersonaUpdate(PersonaUpdate),
+    PersonaSetStatus(PersonaStatusChange),
+    PersonaGet {
+        persona_id: String,
+    },
+    PersonasList {
+        status: Option<PersonaStatus>,
+        project_id: Option<String>,
+        after: u64,
+        limit: u32,
+    },
+    PersonaHistory {
+        persona_id: String,
+        after: u64,
+        limit: u32,
+    },
 }
 
 impl Operation {
@@ -112,6 +130,9 @@ impl Operation {
                 | Self::TaskCreate(_)
                 | Self::TaskTransition(_)
                 | Self::TaskCheckpoint(_)
+                | Self::PersonaCreate(_)
+                | Self::PersonaUpdate(_)
+                | Self::PersonaSetStatus(_)
         )
     }
 }

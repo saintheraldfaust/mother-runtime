@@ -16,12 +16,13 @@ external-source content, not automatically by its filename.
 | [DECISIONS/0001-local-runtime.md](DECISIONS/0001-local-runtime.md) | Public — Public architecture decision and tradeoffs. |
 | [DECISIONS/0002-continuity-packages.md](DECISIONS/0002-continuity-packages.md) | Public — Public data-model decision; no private session contents. |
 | [DECISIONS/0003-host-tracked-tasks.md](DECISIONS/0003-host-tracked-tasks.md) | Public — Public task/verifier architecture and supported limitations. |
+| [DECISIONS/0004-persona-policy.md](DECISIONS/0004-persona-policy.md) | Public — Public persona/revision/capability architecture and remaining limits. |
 | [DOCUMENTATION.md](DOCUMENTATION.md) | Public — Public classification inventory and contributor guidance. |
 | [IDENTITIES.md](IDENTITIES.md) | Public — Public unsupported-feature status and future authorization requirements. |
 | [LICENSING.md](LICENSING.md) | Public — Public license provenance and third-party notice obligations. |
 | [MCP.md](MCP.md) | Public — Public schemas and opt-in placeholder host configurations. |
 | [ORCHESTRATION.md](ORCHESTRATION.md) | Public — Public state machine, evidence scope and sanitized examples. |
-| [PERSONAS.md](PERSONAS.md) | Public — Public planned-feature status, without real persona/account mappings. |
+| [PERSONAS.md](PERSONAS.md) | Public — Public persona registry, capabilities and enforcement limits; no real account mappings. |
 | [PUBLISHING.md](PUBLISHING.md) | Public — Public repository maintenance policy; no credentials or private master content. |
 | [RESEARCH.md](RESEARCH.md) | Public — Public official-source bibliography and technology verification; no internal-only research or transcripts. |
 | [ROADMAP.md](ROADMAP.md) | Public — Public implementation milestones and known gaps. |

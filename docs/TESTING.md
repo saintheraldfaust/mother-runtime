@@ -8,7 +8,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The suite contains 17 unit tests and eight process integration tests.
+The suite contains 20 unit tests and nine process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -21,6 +21,11 @@ Unit coverage:
 - Injected audit-insert failure rolls back the context record, project revision,
   and retry key; the same request can then succeed after removing the fault.
   Event UPDATE/DELETE triggers also reject rewriting existing audit records.
+- Persona create/update/status/history revisions, duplicate names, archived
+  reactivation rejection, and stale expected revisions.
+- Persona-attributed task operations enforce live capabilities and record persona
+  attribution; stale and revoked policies are rejected. Schema 3→4 upgrade
+  preserves a task and adds the persona tables.
 
 Process integration coverage:
 
@@ -88,7 +93,17 @@ Task and evidence coverage:
 - Byte-limited context pagination returns a cursor and recovers all 60 large records
   across pages without gaps. The suite still exercises prior migrations and handoffs.
 
+Persona process coverage:
+
+- A CLI-created persona is read by two independent MCP clients. Editing it through
+  the CLI increments the revision and a fresh MCP read sees the new capability set.
+- A task created and transitioned under persona revision 1 is rejected after the
+  capability is revoked, both with the stale revision and with the current revision.
+  Immutable persona history retains both revisions.
+
 Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
 macOS and Linux validation; no hosted CI run is claimed. No interactive coding-assistant host, coding
-provider, persona authorization, remote GitHub workflow, independent-worker recovery, performance
-target, power-loss, or hostile same-UID isolation test has been performed.
+provider, mandatory-persona authorization, remote GitHub workflow, independent-worker
+recovery, performance target, power-loss, or hostile same-UID isolation test has
+been performed. Persona coverage is local CLI/MCP policy enforcement, not real-host
+identity certification.

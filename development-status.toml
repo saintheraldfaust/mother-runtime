@@ -1,8 +1,8 @@
 format_version = 1
-updated_on = "2026-11-20"
+updated_on = "2026-11-21"
 directive = "MOTHER.md"
-milestone = "Durable host-tracked tasks, checkpoints, bounded file-contract evidence, and task-aware handoffs"
-next_objective = "Implement versioned persona definitions and runtime-enforced live capabilities with stale-policy rejection across clients"
+milestone = "Versioned persona registry, live capability gates, and implementation audit"
+next_objective = "Implement authorized GitHub identity records and a trusted read-only authentication boundary before workers or GitHub writes"
 
 [implemented]
 cargo_workspace = true
@@ -42,12 +42,19 @@ mcp_project_context_health_and_activity_tools = true
 mcp_revision_bearing_resources = true
 project_lookup_by_id = true
 host_configuration_examples = true
+persona_registry = true
+persona_immutable_revisions_and_audit = true
+persona_status_disable_enable_archive = true
+persona_project_scope = true
+task_persona_capability_checks = true
+persona_attribution_on_task_mutations = true
+persona_mcp_tools_and_resource = true
 
 [verification]
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 17
-process_integration_tests = 8
+unit_tests = 20
+process_integration_tests = 9
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
@@ -79,6 +86,10 @@ coverage = [
   "Task creation/checkpoint/transition audit failures roll back all state and retry keys",
   "Schema-2 handoff bytes and retry payloads survive schema-3 migration; failed migration rolls back",
   "Byte-bounded context pages recover all records without cursor gaps",
+  "Persona revisions, status changes, immutable history and duplicate-name rejection",
+  "Asserted task operations use current persona revision, scope and capability",
+  "Stale and revoked persona policy rejects independent MCP clients while history remains readable",
+  "Schema-3 upgrade preserves tasks and adds persona tables",
 ]
 hosted_ci_executed = false
 linux_executed = false
@@ -88,13 +99,34 @@ mcp_protocols_tested = ["2025-11-25", "2026-07-28"]
 interactive_host_tested = false
 real_provider_tested = false
 real_github_tested = false
+real_client_cross_assistant_tested = false
 representative_performance_measured = false
+
+[audit_2026_11_20]
+verified = [
+  "Canonical SQLite state, foreground service, private Unix socket and migrations",
+  "Projects, context, decisions, handoffs, tasks, checkpoints and file evidence",
+  "Revision checks, idempotent writes, diagnostics and MCP bridge",
+  "Two SDK MCP lifecycles and restart recovery in process tests",
+  "Persona registry, immutable revisions, status changes and asserted capability gates",
+]
+incomplete = [
+  "Handoff claims coordinate continuation but grant no execution ownership or lease",
+  "Persona assertions are optional; same-UID clients may use the local-operator path",
+  "Continuation snapshots omit persona, authorization and verified Git scopes",
+]
+not_implemented = [
+  "Real-host Codex/Claude Code/Copilot certification",
+  "Verified GitHub accounts, credential broker and revocation",
+  "Independent workers, scheduling, worktree isolation and GitHub review lifecycle",
+  "Ratatui interface and human approval records",
+]
 
 [remaining]
 phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
-phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona MCP tools after registry implementation", "Per-operation typed result schemas beyond the response envelope"]
-phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling"]
-later = ["Live persona policies", "Authorized GitHub identities", "Durable task scheduling", "Coding-agent adapter", "GitHub workflow", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
+phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona change notification/refresh certification", "Per-operation typed result schemas beyond the response envelope"]
+phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling", "Handoff execution ownership/leases separate from readable history"]
+later = ["Authorized GitHub identities and broker", "Mandatory authenticated persona assertions", "Durable task scheduling", "Coding-agent adapter and mock worker", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
 
 [limitations]
 trust_boundary = "Same OS user; all current clients have local operator authority"
@@ -107,7 +139,10 @@ secret_redaction = false
 encryption_at_rest = false
 network_filesystems_supported = false
 mcp_implemented = true
-persona_authorization_implemented = false
+persona_registry_implemented = true
+persona_authorization_implemented = "optional_asserted_task_operations"
+mandatory_persona_authorization = false
+persona_identity_verified = false
 workers_implemented = false
 github_authentication_implemented = false
 remote_writes_performed = false

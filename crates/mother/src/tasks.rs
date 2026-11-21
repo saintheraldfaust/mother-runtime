@@ -1,4 +1,5 @@
 //! Host-tracked tasks. Labels and reported tests do not authenticate people or prove execution.
+use crate::personas::PersonaClaim;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +102,8 @@ pub struct TaskInput {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub review_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<PersonaClaim>,
     pub expected_project_revision: Option<u64>,
 }
 
@@ -112,6 +115,8 @@ pub struct TaskTransition {
     pub source: String,
     pub reason: String,
     pub owner_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<PersonaClaim>,
     pub expected_task_revision: u64,
     pub expected_project_revision: Option<u64>,
 }
@@ -128,6 +133,8 @@ pub struct CheckpointInput {
     pub blockers: Vec<String>,
     #[serde(default)]
     pub reported_test_results: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<PersonaClaim>,
     pub expected_task_revision: u64,
     pub expected_project_revision: Option<u64>,
 }

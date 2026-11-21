@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 mod continuity;
+mod personas;
 mod tasks;
 
 pub struct Store {
@@ -41,6 +42,9 @@ impl Store {
             }
             if version < 3 {
                 transaction.execute_batch(include_str!("../migrations/003_tasks.sql"))?;
+            }
+            if version < 4 {
+                transaction.execute_batch(include_str!("../migrations/004_personas.sql"))?;
             }
             transaction.commit()?;
         }
@@ -156,7 +160,7 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":false, "mcp_supported":true,"host_tracked_tasks_supported":true}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":false, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -322,6 +326,23 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             after,
             limit,
         } => tasks::transitions(tx, task_id, *after, *limit),
+        Operation::PersonaCreate(input) => personas::create(tx, &request.request_id, input),
+        Operation::PersonaUpdate(update) => personas::update(tx, &request.request_id, update),
+        Operation::PersonaSetStatus(change) => {
+            personas::set_status(tx, &request.request_id, change)
+        }
+        Operation::PersonaGet { persona_id } => personas::get(tx, persona_id),
+        Operation::PersonasList {
+            status,
+            project_id,
+            after,
+            limit,
+        } => personas::list(tx, *status, project_id.as_deref(), *after, *limit),
+        Operation::PersonaHistory {
+            persona_id,
+            after,
+            limit,
+        } => personas::history(tx, persona_id, *after, *limit),
     }
 }
 
@@ -860,5 +881,59 @@ mod tests {
                 .unwrap()
                 < second["items"][0]["sequence"].as_u64().unwrap()
         );
+    }
+
+    #[test]
+    fn schema_three_upgrade_preserves_tasks_and_adds_personas() {
+        let (dir, _lock, connection) = legacy_database();
+        connection
+            .execute_batch(include_str!("../migrations/002_continuity.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/003_tasks.sql"))
+            .unwrap();
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',2)",[]).unwrap();
+        connection.execute("INSERT INTO tasks(id,project_id,title,objective,source,acceptance_criteria,review_required,state,revision,project_revision) VALUES('task','legacy','Old task','Preserve me','old-client','[]',0,'created',1,2)",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        let health = store.execute(&request(Operation::Health)).unwrap();
+        assert_eq!(health["schema_version"], 4);
+        assert_eq!(health["personas_supported"], true);
+        let task = store
+            .execute(&request(Operation::TaskGet {
+                task_id: "task".into(),
+            }))
+            .unwrap();
+        assert_eq!(task["title"], "Old task");
+        assert_eq!(task["latest_transition"]["persona_id"], Value::Null);
+        let personas = store
+            .execute(&request(Operation::PersonasList {
+                status: None,
+                project_id: None,
+                after: 0,
+                limit: 20,
+            }))
+            .unwrap();
+        assert_eq!(personas["items"], json!([]));
+        let created = store
+            .execute(&request(Operation::PersonaCreate(
+                crate::personas::PersonaInput {
+                    name: "review-engineer".into(),
+                    role: "review_engineer".into(),
+                    description: "Reviews changes independently".into(),
+                    responsibilities: vec![],
+                    prohibitions: vec![],
+                    capabilities: vec![],
+                    project_id: None,
+                    preferred_runtime: None,
+                    github_identity: None,
+                    context_retrieval: None,
+                    review_required: true,
+                    max_concurrency: 1,
+                    budget_units: None,
+                },
+            )))
+            .unwrap();
+        assert_eq!(created["revision"], 1);
     }
 }

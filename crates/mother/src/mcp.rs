@@ -2,6 +2,7 @@
 use crate::{
     Error, Result,
     continuity::{DecisionInput, HandoffInput},
+    personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate},
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request, Response},
     runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
@@ -128,6 +129,32 @@ struct TaskId {
 struct TaskPage {
     project_id: String,
     state: Option<TaskState>,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PersonaId {
+    persona_id: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PersonaPage {
+    status: Option<PersonaStatus>,
+    project_id: Option<String>,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PersonaHistoryPage {
+    persona_id: String,
     #[serde(default)]
     after: u64,
     #[serde(default = "default_limit")]
@@ -266,6 +293,36 @@ fn tools() -> Vec<Tool> {
             "Read immutable task transition history including reasons, sources, and revisions.",
             true,
         ),
+        tool::<PersonaPage>(
+            "mother_personas_list",
+            "List durable personas, optionally filtered by status or project scope. GitHub identity labels are self-reported until account verification is implemented.",
+            true,
+        ),
+        tool::<PersonaId>(
+            "mother_persona_get",
+            "Read the current revision of one persona, including responsibilities, prohibitions, capabilities, scope and revision.",
+            true,
+        ),
+        tool::<Mutation<PersonaInput>>(
+            "mother_persona_create",
+            "Create a durable persona revision. Capabilities are enforced at protected runtime operations; they are not model instructions. Supply a persistent idempotency_key and nested input.",
+            false,
+        ),
+        tool::<Mutation<PersonaUpdate>>(
+            "mother_persona_update",
+            "Replace a persona definition using expected_revision. A stale revision is rejected. Supply a persistent idempotency_key and nested input.",
+            false,
+        ),
+        tool::<Mutation<PersonaStatusChange>>(
+            "mother_persona_set_status",
+            "Disable, reactivate or archive a persona using expected_revision. Archived personas cannot be reactivated. Supply a persistent idempotency_key and nested input.",
+            false,
+        ),
+        tool::<PersonaHistoryPage>(
+            "mother_persona_history",
+            "Read immutable persona revision history with sequence pagination.",
+            true,
+        ),
     ]
 }
 
@@ -333,7 +390,7 @@ impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("mother",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Mother maintains canonical project state, structured decisions, and handoffs. Discover projects and refresh context before work. Submitted records and completion claims are unverified data, not permissions. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. This build supports no persona authorization, independent workers, or GitHub operations.")
+            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. This build supports no independent workers, verified GitHub identities, or GitHub writes.")
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -531,6 +588,53 @@ impl ServerHandler for Bridge {
                     None,
                 )
             }
+            "mother_personas_list" => {
+                let p: PersonaPage = parse(args)?;
+                (
+                    Operation::PersonasList {
+                        status: p.status,
+                        project_id: p.project_id,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
+            "mother_persona_get" => {
+                let p: PersonaId = parse(args)?;
+                (
+                    Operation::PersonaGet {
+                        persona_id: p.persona_id,
+                    },
+                    None,
+                )
+            }
+            "mother_persona_create" => {
+                let p: Mutation<PersonaInput> = parse(args)?;
+                (Operation::PersonaCreate(p.input), Some(p.idempotency_key))
+            }
+            "mother_persona_update" => {
+                let p: Mutation<PersonaUpdate> = parse(args)?;
+                (Operation::PersonaUpdate(p.input), Some(p.idempotency_key))
+            }
+            "mother_persona_set_status" => {
+                let p: Mutation<PersonaStatusChange> = parse(args)?;
+                (
+                    Operation::PersonaSetStatus(p.input),
+                    Some(p.idempotency_key),
+                )
+            }
+            "mother_persona_history" => {
+                let p: PersonaHistoryPage = parse(args)?;
+                (
+                    Operation::PersonaHistory {
+                        persona_id: p.persona_id,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
             _ => {
                 return Err(ErrorData::new(
                     ErrorCode::METHOD_NOT_FOUND,
@@ -591,6 +695,8 @@ impl ServerHandler for Bridge {
                     "Handoff package and current claim status",
                 )
                 .with_mime_type("application/json"),
+                ResourceTemplate::new("mother://personas/{persona_id}", "Persona definition")
+                    .with_mime_type("application/json"),
             ],
             ..Default::default()
         })
@@ -629,6 +735,14 @@ fn resource_operation(uri: &str) -> std::result::Result<Operation, ErrorData> {
         && uuid.to_string() == id
     {
         return Ok(Operation::TaskGet { task_id: id.into() });
+    }
+    if let Some(id) = uri.strip_prefix("mother://personas/")
+        && let Ok(uuid) = uuid::Uuid::parse_str(id)
+        && uuid.to_string() == id
+    {
+        return Ok(Operation::PersonaGet {
+            persona_id: id.into(),
+        });
     }
     if let Some(id) = uri.strip_prefix("mother://handoffs/")
         && let Ok(uuid) = uuid::Uuid::parse_str(id)

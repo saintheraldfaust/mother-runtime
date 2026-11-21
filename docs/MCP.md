@@ -45,10 +45,16 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_task_create` | `idempotency_key`, nested `TaskInput` | Host-tracked task contract, IDs and revisions. |
 | `mother_tasks_list` | `project_id`; optional `state`, `after`, `limit` | Task summaries and current project revision. |
 | `mother_task_get` | `task_id` | Task, latest checkpoint/transition, dependencies and limited evidence. |
-| `mother_task_transition` | `idempotency_key`, nested `TaskTransition` | Allowed state update with task/project revision and evidence gates. |
-| `mother_task_checkpoint` | `idempotency_key`, nested `CheckpointInput` | Immutable progress submission plus runtime file observations. |
+| `mother_task_transition` | `idempotency_key`, nested `TaskTransition`; optional `persona` claim | Allowed state update with task/project revision, evidence gates and current-persona capability checks. |
+| `mother_task_checkpoint` | `idempotency_key`, nested `CheckpointInput`; optional `persona` claim | Immutable progress submission plus runtime file observations and optional persona checks. |
 | `mother_task_checkpoints_list` | `task_id`; optional `after`, `limit` | Immutable checkpoint pages. |
-| `mother_task_transitions_list` | `task_id`; optional `after`, `limit` | Immutable transition reasons, sources, states and revisions. |
+| `mother_task_transitions_list` | `task_id`; optional `after`, `limit` | Immutable transition reasons, sources, states, revisions and persona attribution. |
+| `mother_personas_list` | Optional `status`, `project_id`, `after`, `limit` | Persona summaries and cursor. |
+| `mother_persona_get` | `persona_id` | Current persona revision, capabilities and scope. |
+| `mother_persona_create` | `idempotency_key`, nested `PersonaInput` | Created persona revision and audit record. |
+| `mother_persona_update` | `idempotency_key`, nested `PersonaUpdate` | Replacement revision; stale expected revisions conflict. |
+| `mother_persona_set_status` | `idempotency_key`, nested `PersonaStatusChange` | Disabled/active/archived revision. |
+| `mother_persona_history` | `persona_id`; optional `after`, `limit` | Immutable persona revision pages. |
 | `mother_activity_get` | Optional `project_id`, `after`, `limit` | `items`, `next_cursor`, project `revision` when scoped. |
 
 Pagination defaults to `after=0`, `limit=20`, with `1..=100` records per page. Pass
@@ -76,14 +82,17 @@ always query the service. No bridge cache can hide CLI changes.
 - `mother://health`: runtime diagnostics.
 - `mother://tasks/{task_id}`: live host-tracked task and latest checkpoint.
 - `mother://handoffs/{handoff_id}`: immutable package plus live revision and claim.
+- `mother://personas/{persona_id}`: current persona revision and capabilities.
 - `mother://projects/{project_id}`: project identity with current revision.
 - `mother://projects/{project_id}/context`: first 20 context records with current
   revision and `next_cursor`; use `mother_context_get` for remaining pages.
 
-Resource templates require canonical lowercase, hyphenated UUID project IDs.
+Resource templates require canonical lowercase, hyphenated UUID identity values.
 Resources contain JSON with the same response envelope. Reads go to the service
 each time; URI stability does not imply immutable contents. Subscriptions and
-change notifications are not advertised. Refresh explicitly before further work.
+change notifications are not advertised. Refresh explicitly before further work. A persona assertion on a protected task
+operation is checked against the current runtime revision, so a client remembering
+an older persona gets a conflict rather than silently applying old policy.
 
 ## Transport and failure behavior
 

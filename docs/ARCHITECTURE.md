@@ -8,11 +8,14 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `store`: SQLite migrations and transactional application operations.
 - `continuity`: typed decision and handoff submission models.
 - `tasks`: typed host-tracked task contracts and explicit state graph.
+- `personas`: typed persona definitions, statuses, capabilities and authorization claims.
 - `evidence`: bounded descriptor-relative repository file observations.
 - `store/tasks`: task/dependency persistence, immutable checkpoints/transitions,
   optimistic revisions, and local file-contract completion gates.
 - `store/continuity`: decision supersession, bounded snapshots, immutable packages,
   SHA-256 integrity checks, and one-time continuation claims.
+- `store/personas`: revisioned persona persistence, immutable history, status changes,
+  project scope and capability enforcement for asserted task operations.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
 - `main`: Clap command grammar and JSON presentation.
@@ -39,7 +42,9 @@ Requests are limited to 64 KiB and responses to 4 MiB, with five-second read/wri
 deadlines. Excess clients are disconnected; callers may retry. Retry a mutation
 with its original request ID and identical payload because a lost response does
 not imply that the transaction failed. All current callers run with the local
-operator's authority; persona-level authorization is not implemented.
+operator's authority. A caller may assert a persona on task operations; the runtime
+then enforces the current persona revision, status, project scope and declared
+capability. Omitting the assertion retains the local-operator path.
 
 SQLite uses foreign keys, WAL mode, FULL synchronous writes, `user_version`
 migrations, and normalized current-state tables plus an event ledger. State,
@@ -54,9 +59,9 @@ socket can be removed at startup; ordinary files and symlinks are refused. A kil
 process releases the OS lock, permitting restart against the same database.
 
 TOML is authoritative only for startup transport settings. SQLite is authoritative
-for project and context records. Configuration is applied by restarting the
-service, with strict field and version validation. Live persona revisions require
-a separate implementation; editing TOML does not update project revisions.
+for project, context and persona records. Configuration is applied by restarting the
+service, with strict field and version validation. Persona updates are runtime
+operations with their own revisions; editing TOML does not update them.
 
 
 Handoffs separate immutable package bytes from live project revision and claim
@@ -64,11 +69,14 @@ status. Context reads expose active decisions only; explicit history retains
 superseded decisions. [ADR 0002](DECISIONS/0002-continuity-packages.md) defines the
 continuity boundary and conservative claim semantics.
 
-Schema 3 adds host-tracked tasks. File observation runs on the runtime
+Schema 3 adds host-tracked tasks. Schema 4 adds versioned personas, immutable
+persona revision snapshots/audit rows and optional persona attribution on task
+transitions/checkpoints. File observation runs on the runtime
 blocking threads within a state transaction, without invoking any shell or provider.
 Filesystem observations are not transactional with SQLite; they are point-in-time
 evidence with size/path restrictions. Completion rechecks the latest validating
-checkpoint. See [ADR 0003](DECISIONS/0003-host-tracked-tasks.md).
+checkpoint. See [ADR 0003](DECISIONS/0003-host-tracked-tasks.md) and
+[ADR 0004](DECISIONS/0004-persona-policy.md).
 
 Lists cap both item count and approximately 1 MiB of serialized item data. Cursors
 advance only to the final returned item, so byte-limited pages do not lose records.

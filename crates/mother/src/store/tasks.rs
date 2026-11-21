@@ -1,6 +1,7 @@
 use super::{event, page, pagination, revision, text};
 use crate::{
     Error, Result, evidence,
+    personas::Capability,
     protocol::Request,
     tasks::{
         ArtifactCriterion, ArtifactObservation, CheckpointInput, TaskInput, TaskState,
@@ -23,11 +24,11 @@ fn checkpoint_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"task_id":r.get::<_,String>(2)?,
         "task_revision":r.get::<_,i64>(3)?,"project_revision":r.get::<_,i64>(4)?,"submission":parsed_json(r.get(5)?)?,
         "artifacts":parsed_json(r.get(6)?)?,"created_at":r.get::<_,String>(7)?,
+        "persona_id":r.get::<_,Option<String>>(8)?,"persona_revision":r.get::<_,Option<i64>>(9)?,
         "submission_trust":"unverified_submission","artifact_verification_scope":"bounded_regular_file_contents_only","reported_tests_verified":false}),
     )
 }
-const CHECKPOINT_COLUMNS: &str =
-    "sequence,id,task_id,task_revision,project_revision,submission,artifacts,created_at";
+const CHECKPOINT_COLUMNS: &str = "sequence,id,task_id,task_revision,project_revision,submission,artifacts,created_at,persona_id,persona_revision";
 
 pub(super) fn get(tx: &Transaction<'_>, id: &str) -> Result<Value> {
     let mut value=tx.query_row("SELECT sequence,id,project_id,title,objective,source,acceptance_criteria,review_required,state,owner_label,revision,project_revision,latest_checkpoint_id,completion_evidence,created_at,updated_at FROM tasks WHERE id=?1",[id],|r|Ok(json!({
@@ -55,7 +56,7 @@ pub(super) fn get(tx: &Transaction<'_>, id: &str) -> Result<Value> {
     } else {
         Value::Null
     };
-    value["latest_transition"]=tx.query_row("SELECT id,from_state,to_state,reason,source,task_revision,project_revision,created_at FROM task_transitions WHERE task_id=?1 ORDER BY sequence DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"from_state":r.get::<_,String>(1)?,"to_state":r.get::<_,String>(2)?,"reason":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"task_revision":r.get::<_,i64>(5)?,"project_revision":r.get::<_,i64>(6)?,"created_at":r.get::<_,String>(7)?}))).optional()?.unwrap_or(Value::Null);
+    value["latest_transition"]=tx.query_row("SELECT id,from_state,to_state,reason,source,task_revision,project_revision,created_at,persona_id,persona_revision FROM task_transitions WHERE task_id=?1 ORDER BY sequence DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"from_state":r.get::<_,String>(1)?,"to_state":r.get::<_,String>(2)?,"reason":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"task_revision":r.get::<_,i64>(5)?,"project_revision":r.get::<_,i64>(6)?,"created_at":r.get::<_,String>(7)?,"persona_id":r.get::<_,Option<String>>(8)?,"persona_revision":r.get::<_,Option<i64>>(9)?}))).optional()?.unwrap_or(Value::Null);
     Ok(value)
 }
 
@@ -140,6 +141,9 @@ pub(super) fn create(tx: &Transaction<'_>, request: &Request, input: &TaskInput)
     text(&input.objective, "objective", 4096)?;
     text(&input.source, "source", 256)?;
     validate_criteria(&input.acceptance_criteria)?;
+    if let Some(claim) = &input.persona {
+        super::personas::authorize(tx, claim, Capability::TaskCreate, &input.project_id)?;
+    }
     if input.dependencies.len() > 16 || serde_json::to_vec(input)?.len() > 24 * 1024 {
         return Err(Error::Invalid(
             "task supports at most 16 dependencies and 24 KiB of serialized input".into(),
@@ -220,6 +224,10 @@ pub(super) fn checkpoint(
         ));
     }
     let task = get(tx, &input.task_id)?;
+    let project = task["project_id"].as_str().unwrap();
+    if let Some(claim) = &input.persona {
+        super::personas::authorize(tx, claim, Capability::TaskCheckpoint, project)?;
+    }
     let task_next = check_task(&task, input.expected_task_revision)?;
     let state: TaskState = serde_json::from_value(task["state"].clone())?;
     if state.terminal() {
@@ -229,10 +237,10 @@ pub(super) fn checkpoint(
         ));
     }
     let artifacts = observations(tx, &task)?;
-    let project = task["project_id"].as_str().unwrap();
     let next = advance_project(tx, project, input.expected_project_revision)?;
     let id = Uuid::new_v4().to_string();
-    tx.execute("INSERT INTO task_checkpoints(id,task_id,task_revision,project_revision,submission,artifacts) VALUES(?1,?2,?3,?4,?5,?6)",params![id,input.task_id,task_next,next,serde_json::to_string(input)?,serde_json::to_string(&artifacts)?])?;
+    tx.execute("INSERT INTO task_checkpoints(id,task_id,task_revision,project_revision,submission,artifacts,persona_id,persona_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![id,input.task_id,task_next,next,serde_json::to_string(input)?,serde_json::to_string(&artifacts)?,
+        input.persona.as_ref().map(|p|p.persona_id.as_str()),input.persona.as_ref().map(|p|p.expected_revision as i64)])?;
     tx.execute("UPDATE tasks SET revision=?1,project_revision=?2,latest_checkpoint_id=?3,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?4",params![task_next,next,id,input.task_id])?;
     event(
         tx,
@@ -280,6 +288,10 @@ pub(super) fn transition(
     text(&input.reason, "reason", 4096)?;
     text(&input.source, "source", 256)?;
     let task = get(tx, &input.task_id)?;
+    let project = task["project_id"].as_str().unwrap();
+    if let Some(claim) = &input.persona {
+        super::personas::authorize(tx, claim, Capability::TaskTransition, project)?;
+    }
     let task_next = check_task(&task, input.expected_task_revision)?;
     let from: TaskState = serde_json::from_value(task["state"].clone())?;
     if !from.permits(input.state) {
@@ -330,13 +342,13 @@ pub(super) fn transition(
     } else {
         None
     };
-    let project = task["project_id"].as_str().unwrap();
     let next = advance_project(tx, project, input.expected_project_revision)?;
     tx.execute("UPDATE tasks SET state=?1,owner_label=?2,revision=?3,project_revision=?4,completion_evidence=?5,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?6",
         params![input.state.as_str(),owner,task_next,next,evidence.map(|v|serde_json::to_string(&v)).transpose()?,input.task_id])?;
     // Keep the transition reason as durable provenance, alongside the state change.
     let event_id = Uuid::new_v4().to_string();
-    tx.execute("INSERT INTO task_transitions(id,task_id,from_state,to_state,reason,source,task_revision,project_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![event_id,input.task_id,from.as_str(),input.state.as_str(),input.reason,input.source,task_next,next])?;
+    tx.execute("INSERT INTO task_transitions(id,task_id,from_state,to_state,reason,source,task_revision,project_revision,persona_id,persona_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![event_id,input.task_id,from.as_str(),input.state.as_str(),input.reason,input.source,task_next,next,
+        input.persona.as_ref().map(|p|p.persona_id.as_str()),input.persona.as_ref().map(|p|p.expected_revision as i64)])?;
     event(
         tx,
         request,
@@ -387,8 +399,8 @@ pub(super) fn snapshot_tasks(
 pub(super) fn transitions(tx: &Transaction<'_>, id: &str, after: u64, limit: u32) -> Result<Value> {
     pagination(after, limit)?;
     let task = get(tx, id)?;
-    let mut stmt=tx.prepare("SELECT sequence,id,from_state,to_state,reason,source,task_revision,project_revision,created_at FROM task_transitions WHERE task_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")?;
-    let items=stmt.query_map(params![id,after as i64,limit+1],|r|Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"from_state":r.get::<_,String>(2)?,"to_state":r.get::<_,String>(3)?,"reason":r.get::<_,String>(4)?,"source":r.get::<_,String>(5)?,"task_revision":r.get::<_,i64>(6)?,"project_revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    let mut stmt=tx.prepare("SELECT sequence,id,from_state,to_state,reason,source,task_revision,project_revision,created_at,persona_id,persona_revision FROM task_transitions WHERE task_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")?;
+    let items=stmt.query_map(params![id,after as i64,limit+1],|r|Ok(json!({"sequence":r.get::<_,i64>(0)?,"id":r.get::<_,String>(1)?,"from_state":r.get::<_,String>(2)?,"to_state":r.get::<_,String>(3)?,"reason":r.get::<_,String>(4)?,"source":r.get::<_,String>(5)?,"task_revision":r.get::<_,i64>(6)?,"project_revision":r.get::<_,i64>(7)?,"created_at":r.get::<_,String>(8)?,"persona_id":r.get::<_,Option<String>>(9)?,"persona_revision":r.get::<_,Option<i64>>(10)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
     let mut result = page(items, limit);
     result["task_id"] = json!(id);
     result["task_revision"] = task["task_revision"].clone();
@@ -441,6 +453,7 @@ mod tests {
             }],
             dependencies: vec![],
             review_required: false,
+            persona: None,
             expected_project_revision: None,
         }
     }
@@ -455,6 +468,7 @@ mod tests {
             } else {
                 None
             },
+            persona: None,
             expected_task_revision: task["task_revision"].as_u64().unwrap(),
             expected_project_revision: None,
         }
@@ -481,6 +495,7 @@ mod tests {
             work_remaining: vec![],
             blockers: vec![],
             reported_test_results: vec!["No test execution was verified".into()],
+            persona: None,
             expected_task_revision: task["task_revision"].as_u64().unwrap(),
             expected_project_revision: None,
         }

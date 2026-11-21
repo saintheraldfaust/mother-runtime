@@ -5,6 +5,7 @@ pub mod config;
 pub mod continuity;
 mod evidence;
 pub mod mcp;
+pub mod personas;
 pub mod protocol;
 pub mod runtime;
 pub mod store;

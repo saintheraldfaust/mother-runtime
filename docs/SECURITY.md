@@ -15,13 +15,24 @@ GitHub mutation, worker startup, or authorization-policy editing endpoint.
 All local clients currently have operator-level access to all registered projects.
 Do not expose the socket through network forwarding or give untrusted processes
 access to the state directory. MCP tools have this same local operator authority;
-there is no per-host authentication or per-project capability enforcement yet.
+there is no per-host or per-human authentication.
+
+Personas add a runtime policy gate, not a new OS trust boundary. A task create,
+transition or checkpoint may assert a persona and expected revision. The runtime
+checks the current revision, active status, project scope and declared capability.
+Stale or revoked policy is rejected even when a host remembers older instructions.
+The assertion is optional: any same-UID client can omit it and use the existing
+local-operator path. Persona claims are not authenticated identity and do not
+isolate a hostile process. Making them mandatory requires a separate authenticated
+client model.
+
 MCP mutations append context/decisions, explicitly supersede decisions, create
-continuation packages, claim a handoff, or mutate host-tracked task records.
+continuation packages, claim a handoff, mutate host-tracked task records, or manage
+persona revisions.
 Checkpoints and local completion perform bounded file observations. None grants
 independent execution authority. Tool annotations describe
-behavior and are not an authorization boundary. Future protected operations need
-current-policy checks in the runtime.
+behavior and are not an authorization boundary. Persona-attributed task operations
+receive current-policy checks in the runtime; other surfaces still need them.
 
 Context contents and submitted source labels are unverified data. A record named
 `fact` is still a submitted claim. No submitted text becomes runtime policy. Event
@@ -64,7 +75,9 @@ rewrites. Recipient routing labels and originating-host names are self-reported,
 not authenticated principals. A claim coordinates continuation and does not launch
 a worker. Snapshot permissions are explicitly absent and cannot grant authority.
 
-Task owner labels are not persona/identity bindings. Completing a local task verifies
+Task owner labels are not persona/identity bindings. Persona IDs in transition
+records describe which runtime policy authorized the operation, not which human
+performed it. Completing a local task verifies
 its declared file contract only; free-form objectives and reported tests remain
 unverified. Review-required completion is blocked rather than accepting invented
 review/approval claims. State changes do not launch workers or terminate processes.

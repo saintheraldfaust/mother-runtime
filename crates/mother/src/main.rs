@@ -3,6 +3,7 @@ use mother_runtime::{
     Error, Result, config,
     continuity::{DecisionInput, HandoffInput},
     mcp,
+    personas::{PersonaClaim, PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate},
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request},
     runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
@@ -50,6 +51,8 @@ enum Command {
     Handoff(Handoff),
     #[command(subcommand)]
     Tasks(Tasks),
+    #[command(subcommand)]
+    Personas(Personas),
     History {
         #[arg(long)]
         project: Option<String>,
@@ -205,6 +208,10 @@ enum Tasks {
         #[arg(long)]
         expected_task_revision: u64,
         #[arg(long)]
+        persona: Option<String>,
+        #[arg(long)]
+        expected_persona_revision: Option<u64>,
+        #[arg(long)]
         expected_project_revision: Option<u64>,
     },
     /// Record progress and observe the task contract's repository files.
@@ -229,6 +236,80 @@ enum Tasks {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+}
+
+#[derive(Subcommand)]
+enum Personas {
+    /// Create a persona from a bounded JSON definition.
+    Create {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    List {
+        #[arg(long, value_enum)]
+        status: Option<PersonaStatus>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    Inspect {
+        #[arg(long)]
+        persona: String,
+    },
+    /// Replace a persona definition using its current revision.
+    Edit {
+        #[arg(long)]
+        persona: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Disable {
+        #[arg(long)]
+        persona: String,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    Enable {
+        #[arg(long)]
+        persona: String,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    Archive {
+        #[arg(long)]
+        persona: String,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    History {
+        #[arg(long)]
+        persona: String,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+}
+
+fn persona_claim(
+    persona: Option<String>,
+    expected_revision: Option<u64>,
+) -> Result<Option<PersonaClaim>> {
+    match (persona, expected_revision) {
+        (None, None) => Ok(None),
+        (Some(persona_id), Some(expected_revision)) => Ok(Some(PersonaClaim {
+            persona_id,
+            expected_revision,
+        })),
+        _ => Err(Error::Invalid(
+            "persona and expected_persona_revision must be supplied together".into(),
+        )),
+    }
 }
 
 fn handoff_file(path: PathBuf) -> Result<HandoffInput> {
@@ -418,6 +499,8 @@ async fn run(cli: Cli) -> Result<bool> {
                     source,
                     reason,
                     owner_label,
+                    persona,
+                    expected_persona_revision,
                     expected_task_revision,
                     expected_project_revision,
                 }) => Operation::TaskTransition(TaskTransition {
@@ -426,6 +509,7 @@ async fn run(cli: Cli) -> Result<bool> {
                     source,
                     reason,
                     owner_label,
+                    persona: persona_claim(persona, expected_persona_revision)?,
                     expected_task_revision,
                     expected_project_revision,
                 }),
@@ -446,6 +530,65 @@ async fn run(cli: Cli) -> Result<bool> {
                         limit,
                     }
                 }
+                Command::Personas(Personas::Create { file }) => {
+                    Operation::PersonaCreate(submission_file::<PersonaInput>(file, 16 * 1024)?)
+                }
+                Command::Personas(Personas::List {
+                    status,
+                    project,
+                    after,
+                    limit,
+                }) => Operation::PersonasList {
+                    status,
+                    project_id: project,
+                    after,
+                    limit,
+                },
+                Command::Personas(Personas::Inspect { persona }) => Operation::PersonaGet {
+                    persona_id: persona,
+                },
+                Command::Personas(Personas::Edit {
+                    persona,
+                    expected_revision,
+                    file,
+                }) => Operation::PersonaUpdate(PersonaUpdate {
+                    persona_id: persona,
+                    expected_revision,
+                    input: submission_file::<PersonaInput>(file, 16 * 1024)?,
+                }),
+                Command::Personas(Personas::Disable {
+                    persona,
+                    expected_revision,
+                }) => Operation::PersonaSetStatus(PersonaStatusChange {
+                    persona_id: persona,
+                    status: PersonaStatus::Disabled,
+                    expected_revision,
+                }),
+                Command::Personas(Personas::Enable {
+                    persona,
+                    expected_revision,
+                }) => Operation::PersonaSetStatus(PersonaStatusChange {
+                    persona_id: persona,
+                    status: PersonaStatus::Active,
+                    expected_revision,
+                }),
+                Command::Personas(Personas::Archive {
+                    persona,
+                    expected_revision,
+                }) => Operation::PersonaSetStatus(PersonaStatusChange {
+                    persona_id: persona,
+                    status: PersonaStatus::Archived,
+                    expected_revision,
+                }),
+                Command::Personas(Personas::History {
+                    persona,
+                    after,
+                    limit,
+                }) => Operation::PersonaHistory {
+                    persona_id: persona,
+                    after,
+                    limit,
+                },
                 _ => unreachable!(),
             };
             let request = Request {

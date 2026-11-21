@@ -41,9 +41,10 @@ The current implementation includes:
 - Runtime file evidence.
 - Revision checks and idempotent writes.
 - Runtime diagnostics.
+- Versioned personas with immutable history and runtime capability checks for asserted task operations.
 - An MCP stdio bridge implemented using the official Rust SDK.
 
-Two MCP protocol lifecycles have been tested using SDK clients.
+Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients; no real coding-assistant host has yet been certified.
 
 Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
 
@@ -51,7 +52,7 @@ Interactive coding-assistant sessions and cross-provider continuation have not y
 
 Mother's next engineering milestones include:
 
-**Persistent personas:** Configurable engineering roles with versioned responsibilities, permissions, instructions, and execution policies.
+**Persistent personas:** Expand the verified registry into mandatory authenticated adoption, execution policies, and live client notifications.
 
 **Cross-assistant continuity:** Verified retrieval and continuation of engineering state across supported coding clients.
 

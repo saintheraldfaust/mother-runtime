@@ -26,11 +26,17 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `tasks create --file FILE` | Create a host-tracked task from a bounded JSON file contract. |
 | `tasks inspect --task ID` | Retrieve task revisions, dependencies, latest checkpoint/transition, and evidence. |
 | `tasks list --project ID [--state STATE] [--after N] [--limit N]` | Page through task summaries. |
-| `tasks transition --task ID --state STATE --source SOURCE --reason TEXT --expected-task-revision N [--owner-label LABEL] [--expected-project-revision N]` | Apply an allowed state transition with evidence/dependency gates. |
+| `tasks transition --task ID --state STATE --source SOURCE --reason TEXT --expected-task-revision N [--owner-label LABEL] [--persona ID --expected-persona-revision N] [--expected-project-revision N]` | Apply an allowed state transition with evidence/dependency gates and optional current-persona capability enforcement. |
 | `tasks checkpoint --file FILE` | Persist progress and runtime observations of the task contract files. |
 | `tasks checkpoints --task ID [--after N] [--limit N]` | Retrieve immutable checkpoint history. |
 | `tasks history --task ID [--after N] [--limit N]` | Retrieve transition reasons, sources and revisions. |
 | `history [--project ID] [--after N] [--limit N]` | Retrieve committed events, optionally project-scoped. |
+| `personas create --file FILE` | Create a revisioned persona definition from bounded JSON. |
+| `personas list [--status STATUS] [--project ID] [--after N] [--limit N]` | Page through personas, optionally filtered by status or project scope. |
+| `personas inspect --persona ID` | Read the current persona revision and declared capabilities. |
+| `personas edit --persona ID --expected-revision N --file FILE` | Replace a persona definition, rejecting a stale revision. |
+| `personas disable/enable/archive --persona ID --expected-revision N` | Change status with an immutable audit revision; archived is the safe deletion path. |
+| `personas history --persona ID [--after N] [--limit N]` | Retrieve immutable persona revision snapshots. |
 
 Kinds: `fact`, `observation`, `failure`, `blocker`, `objective`. All are unverified
 submissions. The kind does not imply authorization or evidence.
@@ -64,3 +70,10 @@ hyphens in CLI flags and underscores in JSON. All task mutations use the same
 retry-key namespace as other writes. Lists may return fewer than the requested
 items due to the serialized-byte budget; follow `next_cursor` until null. See
 [task semantics](ORCHESTRATION.md), especially the limited file-completion scope.
+
+Persona examples are in [persona-implementation.json](../examples/persona-implementation.json)
+and [persona-review.json](../examples/persona-review.json). Task JSON inputs may
+include `persona: {"persona_id":"...","expected_revision":N}`; the CLI transition
+form uses `--persona` and `--expected-persona-revision`. The runtime checks the
+latest persona revision, active status, project scope and capability. Omitting the
+assertion uses the existing local-operator path. See [personas](PERSONAS.md).

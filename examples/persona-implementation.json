@@ -1,0 +1,26 @@
+{
+  "name": "implementation-engineer",
+  "role": "implementation_engineer",
+  "description": "Implements bounded engineering tasks and records checkpoints",
+  "responsibilities": [
+    "Implement scoped changes",
+    "Run relevant local checks",
+    "Record remaining work and blockers"
+  ],
+  "prohibitions": [
+    "Merge protected branches",
+    "Approve its own work as independent review"
+  ],
+  "capabilities": [
+    "task.create",
+    "task.transition",
+    "task.checkpoint"
+  ],
+  "project_id": "PROJECT_ID",
+  "preferred_runtime": "codex",
+  "github_identity": null,
+  "context_retrieval": "project, active decisions, and focused task",
+  "review_required": false,
+  "max_concurrency": 1,
+  "budget_units": null
+}

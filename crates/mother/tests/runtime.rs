@@ -380,7 +380,7 @@ async fn mcp_shared_state_scenario() {
         rmcp::model::ProtocolVersion::V_2025_11_25
     );
     let tools = a.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 26);
     assert!(tools.iter().all(|t| t.output_schema.is_some()));
     let write_tool = tools
         .iter()
@@ -488,7 +488,7 @@ async fn mcp_shared_state_scenario() {
         "CLI test failed"
     );
     assert_eq!(b.list_all_resources().await.unwrap().len(), 1);
-    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 4);
+    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 5);
     let resource = b
         .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
             "mother://projects/{id}/context"
@@ -1149,4 +1149,195 @@ async fn task_scenario() {
     b.cancel().await.unwrap();
     c.cancel().await.unwrap();
     final_runtime.stop();
+}
+
+#[tokio::test]
+async fn persona_revisions_propagate_and_stale_capabilities_are_rejected() {
+    tokio::time::timeout(Duration::from_secs(45), persona_live_policy_scenario())
+        .await
+        .expect("persona scenario timed out");
+}
+
+async fn persona_live_policy_scenario() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut service = Runtime::start(&dir);
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "Persona test",
+            "--repository",
+            temp.path().to_str().unwrap(),
+        ],
+    );
+    let project_id = project["result"]["id"].as_str().unwrap().to_owned();
+
+    let persona_file = temp.path().join("persona.json");
+    std::fs::write(
+        &persona_file,
+        serde_json::to_vec(&serde_json::json!({
+            "name":"implementation-engineer",
+            "role":"implementation_engineer",
+            "description":"Implements bounded tasks and checkpoints",
+            "responsibilities":["Implement reviewed changes"],
+            "prohibitions":["Merge protected branches"],
+            "capabilities":["task.create","task.transition"],
+            "project_id":project_id,
+            "preferred_runtime":"codex",
+            "review_required":false,
+            "max_concurrency":1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let persona = success(
+        &dir,
+        &[
+            "personas",
+            "create",
+            "--file",
+            persona_file.to_str().unwrap(),
+        ],
+    );
+    let persona_id = persona["result"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(persona["result"]["revision"], 1);
+
+    let a = mcp_client(&dir, false).await;
+    let b = mcp_client(&dir, true).await;
+    let before = tool(
+        &a,
+        "mother_persona_get",
+        serde_json::json!({"persona_id":persona_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(before["result"]["revision"], 1);
+    assert!(
+        before["result"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "task.transition")
+    );
+
+    let task = tool(
+        &a,
+        "mother_task_create",
+        serde_json::json!({
+            "idempotency_key":"persona-task",
+            "input":{
+                "project_id":project_id,
+                "title":"Persona-gated task",
+                "objective":"Verify current runtime policy",
+                "source":"client-a",
+                "acceptance_criteria":[{"path":"README.md"}],
+                "persona":{"persona_id":persona_id,"expected_revision":1}
+            }
+        }),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    let task_id = task["result"]["id"].as_str().unwrap().to_owned();
+    let triaged = tool(
+        &a,
+        "mother_task_transition",
+        serde_json::json!({
+            "idempotency_key":"persona-triaged",
+            "input":{
+                "task_id":task_id,
+                "state":"triaged",
+                "source":"client-a",
+                "reason":"initial triage",
+                "expected_task_revision":1,
+                "persona":{"persona_id":persona_id,"expected_revision":1}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(triaged.is_error, Some(false));
+
+    std::fs::write(
+        &persona_file,
+        serde_json::to_vec(&serde_json::json!({
+            "name":"implementation-engineer",
+            "role":"implementation_engineer",
+            "description":"Revoked transition capability",
+            "responsibilities":["Implement reviewed changes"],
+            "prohibitions":["Merge protected branches"],
+            "capabilities":["task.create"],
+            "project_id":project_id,
+            "preferred_runtime":"codex",
+            "review_required":false,
+            "max_concurrency":1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let edited = success(
+        &dir,
+        &[
+            "personas",
+            "edit",
+            "--persona",
+            &persona_id,
+            "--expected-revision",
+            "1",
+            "--file",
+            persona_file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(edited["result"]["revision"], 2);
+
+    let refreshed = tool(
+        &b,
+        "mother_persona_get",
+        serde_json::json!({"persona_id":persona_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(refreshed["result"]["revision"], 2);
+    assert!(
+        !refreshed["result"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "task.transition")
+    );
+
+    for expected_revision in [1, 2] {
+        let denied = tool(
+            &a,
+            "mother_task_transition",
+            serde_json::json!({
+                "idempotency_key":format!("persona-ready-{expected_revision}"),
+                "input":{
+                    "task_id":task_id,
+                    "state":"ready",
+                    "source":"client-a",
+                    "reason":"attempt stale policy",
+                    "expected_task_revision":2,
+                    "persona":{"persona_id":persona_id,"expected_revision":expected_revision}
+                }
+            }),
+        )
+        .await;
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(
+            denied.structured_content.unwrap()["error"]["code"],
+            "conflict"
+        );
+    }
+
+    let history = success(&dir, &["personas", "history", "--persona", &persona_id]);
+    assert_eq!(history["result"]["items"].as_array().unwrap().len(), 2);
+    a.cancel().await.ok();
+    b.cancel().await.ok();
+    service.stop();
 }

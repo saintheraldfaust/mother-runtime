@@ -27,6 +27,14 @@ invalidate a task mutation unless that optional project check was supplied.
 Task updates, immutable history/checkpoints, audit events, and retry responses
 commit atomically. Exact retries return their original result without rereading files.
 
+Task create, transition and checkpoint inputs may include an optional `persona`
+claim with `persona_id` and `expected_revision`. The runtime then loads the current
+persona and requires active status, matching project scope and the relevant
+capability (`task.create`, `task.transition` or `task.checkpoint`). A stale claim
+is rejected before any task mutation. Accepted transitions/checkpoints record the
+persona ID and revision; the fields are null on the local-operator path. Omitting
+the claim does not bypass other task revision, state or evidence checks.
+
 ## State transitions
 
 The local completion path is:
