@@ -70,6 +70,12 @@ No path completes a task. Worktrees are retained; `workers cleanup` removes only
 inactive execution's worktree and prunes Git metadata. If a lease expires while a
 process may still run, recovery marks the task `blocked` instead of requeueing it.
 
+If the supervisor is killed, the owner must reconcile the stale process explicitly.
+`workers abandon` checks PID existence and refuses without `--force`, then records
+the process as `lost` without sending a signal, blocks the task, and permits cleanup.
+This prevents an unrecoverable running row but does not prove the OS process is dead
+or prevent PID reuse. It is not an automatic reaper.
+
 Expiry recovery may still miscategorize late work, and process PIDs are not
 authenticated worker identity. Mutating worker operations are CLI-only, while MCP
 exposes reads. Provider credentials, budgets, sandbox isolation, test execution,

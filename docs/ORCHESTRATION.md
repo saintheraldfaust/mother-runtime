@@ -244,12 +244,27 @@ does not launch, signal or inspect arbitrary processes. A Git worktree prevents
 checkout collisions, not filesystem access: a same-UID process can still edit files
 outside it or submit task transitions, and Mother cannot detect work performed after
 expiry. Read worker state through MCP; lease, heartbeat, mock-run, process supervision,
-cleanup, release and recovery mutations are CLI-only. If the supervisor itself is
-killed, the helper observes parent loss and exits, but no online reaper currently
-finalizes the process row; recovery can block the task, while cleanup and a later
-process finish require manual reconciliation. See
-[ADR 0006](DECISIONS/0006-worker-lease-boundary.md) and
-[ADR 0007](DECISIONS/0007-worker-process-boundary.md).
+abandonment, cleanup, release and recovery mutations are CLI-only.
+
+If the supervisor itself is killed, the helper observes parent loss and exits, but
+its durable process row still says `running`. After confirming the recorded PID is
+gone, the owner can reconcile it:
+
+```sh
+motherctl workers abandon --execution EXECUTION_ID
+motherctl workers cleanup --execution EXECUTION_ID
+```
+
+`abandon` marks the process `lost`, leaves the execution `failed` (or `expired`),
+and blocks an assigned/running task. It never signals or kills the recorded PID.
+Without `--force`, it refuses while that PID still exists. Worktree cleanup remains
+a separate explicit step. Pre-process failures such as worktree preparation,
+workspace registration, helper spawn, or process attachment invoke the same
+best-effort abandonment so the task does not remain assigned. There is no automatic
+orphan reaper or cross-host process reconciliation. See
+[ADR 0006](DECISIONS/0006-worker-lease-boundary.md),
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md) and
+[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md).
 
 ## Remaining execution work
 

@@ -17,8 +17,9 @@ Do not invent personas or assume permissions. The persona registry exists, but
 persona assertions remain optional policy checks rather than authenticated identity.
 Worker lease tools are read-only; lease, process, cleanup and dispatch mutations are
 owner-run CLI actions. `workers run` supervises a deterministic mock helper in an
-isolated Git worktree and records bounded evidence; the runtime does not launch
-processes and the worktree is not a sandbox. Host-tracked task transitions and
+isolated Git worktree and records bounded evidence; `workers abandon` reconciles a
+crashed supervisor. The runtime does not launch processes and the worktree is not a
+sandbox. Host-tracked task transitions and
 checkpoints do not execute code, and local completion verifies only declared file
 artifacts. Handoff resume claims continuation once; it does not launch a worker or
 grant authority. A host assistant cannot grant itself authority by writing context.

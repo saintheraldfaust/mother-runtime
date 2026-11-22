@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 mod continuity;
 mod github;
 mod personas;
@@ -59,6 +59,10 @@ impl Store {
             if version < 7 {
                 transaction
                     .execute_batch(include_str!("../migrations/007_worker_processes.sql"))?;
+            }
+            if version < 8 {
+                transaction
+                    .execute_batch(include_str!("../migrations/008_worker_process_loss.sql"))?;
             }
             transaction.commit()?;
         }
@@ -414,6 +418,7 @@ fn apply(tx: &Transaction<'_>, request: &Request, dir: Option<&Path>) -> Result<
         Operation::WorkerProcessFinish(input) => {
             workers::process_finish(tx, worker_dir(dir)?, request, input)
         }
+        Operation::WorkerAbandon(input) => workers::abandon(tx, request, input),
         Operation::WorkerWorkspaceCleanup(input) => {
             workers::workspace_cleanup(tx, worker_dir(dir)?, request, input)
         }
@@ -972,7 +977,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 7);
+        assert_eq!(health["schema_version"], 8);
         assert_eq!(health["execution_leases_supported"], true);
         assert_eq!(health["personas_supported"], true);
         assert_eq!(health["github_identity_records_supported"], true);
@@ -1033,7 +1038,7 @@ mod tests {
         let mut store = Store::open(dir.path()).unwrap();
         assert_eq!(
             store.execute(&request(Operation::Health)).unwrap()["schema_version"],
-            7
+            8
         );
         let persona = store
             .execute(&request(Operation::PersonaGet {
@@ -1070,7 +1075,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 7);
+        assert_eq!(health["schema_version"], 8);
         let execution = store
             .execute(&request(Operation::WorkerExecutionGet {
                 execution_id: "execution".into(),
@@ -1080,6 +1085,45 @@ mod tests {
         assert_eq!(execution["workspace"], Value::Null);
         assert_eq!(execution["process"], Value::Null);
         assert_eq!(execution["task_state"], "assigned");
+    }
+
+    #[test]
+    fn schema_seven_upgrade_preserves_processes_and_allows_lost_status() {
+        let (dir, _lock, connection) = legacy_database();
+        for migration in [
+            include_str!("../migrations/002_continuity.sql"),
+            include_str!("../migrations/003_tasks.sql"),
+            include_str!("../migrations/004_personas.sql"),
+            include_str!("../migrations/005_github_identities.sql"),
+            include_str!("../migrations/006_worker_leases.sql"),
+            include_str!("../migrations/007_worker_processes.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',3)",[]).unwrap();
+        connection.execute("INSERT INTO tasks(id,project_id,title,objective,source,acceptance_criteria,review_required,state,owner_label,revision,project_revision) VALUES('task','legacy','Leased task','Preserve process','old-client','[{\"path\":\"artifact\"}]',0,'assigned','worker-a',1,3)",[]).unwrap();
+        connection.execute("INSERT INTO worker_executions(id,task_id,project_id,worker_label,adapter,status,revision,attempt,lease_seconds,lease_expires_at,heartbeat_at) VALUES('execution','task','legacy','worker-a','mock','running',3,1,120,'2099-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",[]).unwrap();
+        connection.execute("INSERT INTO worker_processes(id,execution_id,pid,status,log_path) VALUES('process','execution',42,'running','/legacy/worker.log')",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        let health = store.execute(&request(Operation::Health)).unwrap();
+        assert_eq!(health["schema_version"], 8);
+        let execution = store
+            .execute(&request(Operation::WorkerExecutionGet {
+                execution_id: "execution".into(),
+            }))
+            .unwrap();
+        assert_eq!(execution["process"]["status"], "running");
+        let abandoned = store
+            .execute(&request(Operation::WorkerAbandon(
+                crate::workers::WorkerAbandonInput {
+                    execution_id: "execution".into(),
+                    expected_revision: 3,
+                },
+            )))
+            .unwrap();
+        assert_eq!(abandoned["process"]["status"], "lost");
+        assert_eq!(abandoned["task_state"], "blocked");
     }
 
     #[test]
@@ -1099,7 +1143,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 7);
+        assert_eq!(health["schema_version"], 8);
         assert_eq!(health["workers_supported"], true);
         assert_eq!(health["worker_process_supervision"], true);
         assert_eq!(health["worker_worktree_isolation"], true);

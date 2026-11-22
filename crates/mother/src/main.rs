@@ -11,8 +11,8 @@ use mother_runtime::{
     runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
     workers::{
-        WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
-        WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
+        WorkerAbandonInput, WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput,
+        WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
         WorkerReleaseInput, WorkerReleaseOutcome, WorkerWorkspaceCleanupInput,
         WorkerWorkspaceInput,
     },
@@ -465,6 +465,14 @@ enum Workers {
         #[arg(long, default_value_t = 0)]
         helper_exit_code: i32,
     },
+    /// Mark a crashed supervisor's active process as lost and block its task.
+    Abandon {
+        #[arg(long)]
+        execution: String,
+        /// Abandon even when the recorded PID still exists.
+        #[arg(long)]
+        force: bool,
+    },
     /// Remove an inactive worker worktree and mark its workspace cleaned up.
     Cleanup {
         #[arg(long)]
@@ -622,6 +630,9 @@ async fn run(cli: Cli) -> Result<bool> {
                 cli.json,
             )
             .await
+        }
+        Command::Workers(Workers::Abandon { execution, force }) => {
+            abandon_execution(&dir, execution, force, cli.json).await
         }
         Command::Workers(Workers::Cleanup { execution }) => {
             cleanup_workspace(&dir, execution, cli.json).await
@@ -988,6 +999,37 @@ async fn request_result(dir: &Path, operation: Operation) -> Result<serde_json::
         .ok_or_else(|| Error::Unavailable("runtime returned no result".into()))
 }
 
+async fn best_effort_abandon(dir: &Path, execution_id: &str) {
+    let Ok(value) = request_result(
+        dir,
+        Operation::WorkerExecutionGet {
+            execution_id: execution_id.into(),
+        },
+    )
+    .await
+    else {
+        return;
+    };
+    if value["active"].as_bool() != Some(true) && value["process"]["status"] != "running" {
+        return;
+    }
+    let _ = request_result(
+        dir,
+        Operation::WorkerAbandon(WorkerAbandonInput {
+            execution_id: execution_id.into(),
+            expected_revision: value["revision"].as_u64().unwrap(),
+        }),
+    )
+    .await;
+}
+
+fn process_exists(pid: u32) -> bool {
+    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 fn valid_commit(commit: &str) -> bool {
     matches!(commit.len(), 40 | 64)
         && commit
@@ -1163,16 +1205,29 @@ async fn supervised_run(
     .await?;
     let execution_id = leased["id"].as_str().unwrap().to_owned();
     let project_id = leased["project_id"].as_str().unwrap().to_owned();
-    let project = request_result(
+    let project = match request_result(
         dir,
         Operation::ProjectGet {
             project_id: project_id.clone(),
         },
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+    };
     let repository = PathBuf::from(project["repository"].as_str().unwrap());
-    let base_commit = prepare_worktree(dir, &execution_id, &repository)?;
-    let workspace = request_result(
+    let base_commit = match prepare_worktree(dir, &execution_id, &repository) {
+        Ok(value) => value,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+    };
+    let workspace = match request_result(
         dir,
         Operation::WorkerWorkspaceStart(WorkerWorkspaceInput {
             execution_id: execution_id.clone(),
@@ -1180,10 +1235,29 @@ async fn supervised_run(
             base_commit,
         }),
     )
-    .await?;
-    let worktree = config::worker_execution_dir(dir, &execution_id)?.join("worktree");
-    let executable = std::env::current_exe()?;
-    let mut child = ProcessCommand::new(executable)
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+    };
+    let worktree = match config::worker_execution_dir(dir, &execution_id) {
+        Ok(path) => path.join("worktree"),
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+    };
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error.into());
+        }
+    };
+    let mut child = match ProcessCommand::new(executable)
         .arg("__mock-worker")
         .arg("--parent-pid")
         .arg(std::process::id().to_string())
@@ -1200,7 +1274,14 @@ async fn supervised_run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
-        .spawn()?;
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error.into());
+        }
+    };
     let stdout = child.stdout.take().map(capture);
     let stderr = child.stderr.take().map(capture);
     let attached = match request_result(
@@ -1217,6 +1298,7 @@ async fn supervised_run(
         Ok(value) => value,
         Err(error) => {
             let _ = terminate(&mut child);
+            best_effort_abandon(dir, &execution_id).await;
             return Err(error);
         }
     };
@@ -1259,8 +1341,8 @@ async fn supervised_run(
                     .await
                     .ok()
                     .filter(|value| value["process"]["status"] == "running");
-                    if let Some(current) = current {
-                        let _ = request_result(
+                    if let Some(current) = current
+                        && request_result(
                             dir,
                             Operation::WorkerProcessFinish(WorkerProcessFinishInput {
                                 execution_id: execution_id.clone(),
@@ -1269,7 +1351,10 @@ async fn supervised_run(
                                 exit_code: None,
                             }),
                         )
-                        .await;
+                        .await
+                        .is_err()
+                    {
+                        best_effort_abandon(dir, &execution_id).await;
                     }
                     return Err(error);
                 }
@@ -1295,7 +1380,7 @@ async fn supervised_run(
     } else {
         WorkerProcessOutcome::Killed
     };
-    let finished = request_result(
+    let finished = match request_result(
         dir,
         Operation::WorkerProcessFinish(WorkerProcessFinishInput {
             execution_id: execution_id.clone(),
@@ -1304,8 +1389,51 @@ async fn supervised_run(
             exit_code: status.code(),
         }),
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+    };
     output(&serde_json::json!({"result":finished}), compact)?;
+    Ok(true)
+}
+
+async fn abandon_execution(
+    dir: &Path,
+    execution: String,
+    force: bool,
+    compact: bool,
+) -> Result<bool> {
+    let value = request_result(
+        dir,
+        Operation::WorkerExecutionGet {
+            execution_id: execution.clone(),
+        },
+    )
+    .await?;
+    let process = &value["process"];
+    if process["status"] == "running" && !force {
+        let pid = process["pid"]
+            .as_u64()
+            .ok_or_else(|| Error::Integrity("running process has no PID".into()))?;
+        if process_exists(pid as u32) {
+            return Err(Error::Conflict(
+                "recorded process PID still exists; stop it first or pass --force".into(),
+            ));
+        }
+    }
+    let value = request_result(
+        dir,
+        Operation::WorkerAbandon(WorkerAbandonInput {
+            execution_id: execution,
+            expected_revision: value["revision"].as_u64().unwrap(),
+        }),
+    )
+    .await?;
+    output(&serde_json::json!({"result":value}), compact)?;
     Ok(true)
 }
 

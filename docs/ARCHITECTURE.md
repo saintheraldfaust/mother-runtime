@@ -86,15 +86,17 @@ persona revision snapshots/audit rows and optional persona attribution on task
 transitions/checkpoints. Schema 5 adds read-only verified GitHub identity records,
 persona bindings, revocation and immutable identity revisions/events. Schema 6 adds
 worker execution leases and immutable lease events. Schema 7 adds worker workspaces
-and supervised process records. File observation runs on the runtime blocking threads
-within a state transaction, without invoking any shell or provider. Filesystem
-observations are not transactional with SQLite; they are point-in-time evidence with
-size/path restrictions. Completion rechecks the latest validating checkpoint. See
+and supervised process records; schema 8 adds an explicit `lost` process state for
+abandoned supervision. File observation runs on the runtime blocking threads within
+a state transaction, without invoking any shell or provider. Filesystem observations
+are not transactional with SQLite; they are point-in-time evidence with size/path
+restrictions. Completion rechecks the latest validating checkpoint. See
 [ADR 0003](DECISIONS/0003-host-tracked-tasks.md),
 [ADR 0004](DECISIONS/0004-persona-policy.md),
 [ADR 0005](DECISIONS/0005-github-identity-boundary.md),
-[ADR 0006](DECISIONS/0006-worker-lease-boundary.md) and
-[ADR 0007](DECISIONS/0007-worker-process-boundary.md).
+[ADR 0006](DECISIONS/0006-worker-lease-boundary.md),
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md) and
+[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md).
 
 Lists cap both item count and approximately 1 MiB of serialized item data. Cursors
 advance only to the final returned item, so byte-limited pages do not lose records.

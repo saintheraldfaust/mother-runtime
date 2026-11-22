@@ -57,9 +57,9 @@ prove that a launched process performed requested work, detect late edits after
 expiry, or prevent a same-UID process from submitting transitions.
 
 If the supervisor itself is killed, the helper observes parent loss and exits, but
-no online reaper currently finalizes the process row or releases blocked cleanup.
-Operator reconciliation is required. Provider adapters, credentials, budgets, test
-execution, cancellation across hosts, automatic retry, independent review, and
-evidence reconciliation remain separate work. Any real provider adapter must reuse this ownership boundary and add explicit
+this decision added no automatic process-row finalization. ADR 0008 later adds an
+explicit owner-run abandonment command; it is not an automatic reaper. Provider
+adapters, credentials, budgets, test execution, cancellation across hosts, automatic
+retry, independent review, and evidence reconciliation remain separate work. Any real provider adapter must reuse this ownership boundary and add explicit
 credential, network, resource, and reconciliation controls before being described as
 isolated execution.

@@ -164,3 +164,10 @@ pub struct WorkerProcessFinishInput {
     pub outcome: WorkerProcessOutcome,
     pub exit_code: Option<i32>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerAbandonInput {
+    pub execution_id: String,
+    pub expected_revision: u64,
+}

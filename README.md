@@ -40,7 +40,7 @@ The current implementation includes:
 - Durable host-tracked tasks and checkpoints.
 - Dependency-aware worker execution leases with heartbeat, bounded concurrency and crash recovery.
 - A deterministic mock worker adapter that records checkpoints without editing files or auto-completing work.
-- Owner-run supervised mock processes with isolated Git worktrees, bounded logs and artifact evidence.
+- Owner-run supervised mock processes with isolated Git worktrees, bounded logs, artifact evidence, and explicit abandoned-supervisor reconciliation.
 - Runtime file evidence.
 - Revision checks and idempotent writes.
 - Runtime diagnostics.

@@ -4,8 +4,8 @@ use crate::{
     protocol::Request,
     tasks::{CheckpointInput, TaskState, TaskTransition},
     workers::{
-        WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
-        WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
+        WorkerAbandonInput, WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput,
+        WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
         WorkerReleaseInput, WorkerReleaseOutcome, WorkerWorkspaceCleanupInput,
         WorkerWorkspaceInput,
     },
@@ -702,8 +702,10 @@ pub(super) fn process_attach(
     input: &WorkerProcessAttachInput,
 ) -> Result<Value> {
     validate_seconds(input.lease_seconds)?;
-    if input.pid <= 1 {
-        return Err(Error::Invalid("pid must be greater than 1".into()));
+    if input.pid <= 1 || input.pid > i32::MAX as u32 {
+        return Err(Error::Invalid(
+            "pid must be between 2 and the platform pid maximum".into(),
+        ));
     }
     let value = execution(tx, &input.execution_id)?;
     if value["revision"].as_u64() != Some(input.expected_revision) {
@@ -880,6 +882,86 @@ pub(super) fn process_finish(
         &value,
         "worker.process_finished",
         json!({"outcome":input.outcome.as_str(),"exit_code":input.exit_code,"evidence":evidence,"repository_mutation":false,"completion":false}),
+    )?;
+    execution(tx, &input.execution_id)
+}
+
+pub(super) fn abandon(
+    tx: &Transaction<'_>,
+    request: &Request,
+    input: &WorkerAbandonInput,
+) -> Result<Value> {
+    let value = execution(tx, &input.execution_id)?;
+    if value["revision"].as_u64() != Some(input.expected_revision) {
+        return Err(Error::Conflict(format!(
+            "stale worker revision; current revision is {}",
+            value["revision"]
+        )));
+    }
+    let process = value["process"]["status"].as_str().map(str::to_owned);
+    let process_running = process.as_deref() == Some("running");
+    if !value["active"].as_bool().unwrap_or(false) && !process_running {
+        return Err(Error::Conflict(
+            "worker execution is not active and has no running process to abandon".into(),
+        ));
+    }
+    if process_running {
+        tx.execute(
+            "UPDATE worker_processes SET status='lost',ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE execution_id=?1 AND status='running'",
+            [&input.execution_id],
+        )?;
+    }
+    let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
+    if matches!(task["state"].as_str(), Some("assigned" | "running")) {
+        tasks::transition(
+            tx,
+            request,
+            &TaskTransition {
+                task_id: task["id"].as_str().unwrap().into(),
+                state: TaskState::Blocked,
+                source: "worker-abandon".into(),
+                reason: "owner abandoned worker supervision; reconcile the process and worktree before retry"
+                    .into(),
+                owner_label: None,
+                persona: None,
+                expected_task_revision: task["task_revision"].as_u64().unwrap(),
+                expected_project_revision: None,
+            },
+        )?;
+    }
+    let result = json!({
+        "reason":"owner_abandoned_supervision",
+        "process_lost":process_running,
+        "process_signal_sent":false,
+        "repository_mutation":false,
+        "completion":false
+    });
+    let status = if value["expired"] == true {
+        "expired"
+    } else {
+        "failed"
+    };
+    tx.execute(
+        "UPDATE worker_executions SET status=?1,revision=revision+1,result=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?3",
+        params![
+            status,
+            serde_json::to_string(&result)?,
+            input.execution_id
+        ],
+    )?;
+    let value = execution(tx, &input.execution_id)?;
+    record_event(
+        tx,
+        request,
+        &value,
+        "worker.abandoned",
+        json!({
+            "process_status":process,
+            "process_lost":process_running,
+            "process_signal_sent":false,
+            "repository_mutation":false,
+            "completion":false
+        }),
     )?;
     execution(tx, &input.execution_id)
 }
@@ -1508,6 +1590,101 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(task["state"], "blocked");
+    }
+
+    #[test]
+    fn abandoned_supervision_marks_process_lost_and_blocks_task() {
+        let (dir, _lock, mut store, project) = fixture();
+        let task = ready(&mut store, &project, "Abandoned process");
+        let leased = store
+            .execute(&request(Operation::WorkerLease(lease(
+                &task,
+                "process-a",
+                120,
+                2,
+            ))))
+            .unwrap();
+        let execution_id = leased["id"].as_str().unwrap().to_owned();
+        let root = crate::config::worker_execution_dir(dir.path(), &execution_id).unwrap();
+        std::fs::create_dir(root.join("worktree")).unwrap();
+        store
+            .execute(&request(Operation::WorkerWorkspaceStart(
+                WorkerWorkspaceInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 1,
+                    base_commit: "c".repeat(40),
+                },
+            )))
+            .unwrap();
+        store
+            .execute(&request(Operation::WorkerProcessAttach(
+                WorkerProcessAttachInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 2,
+                    lease_seconds: 120,
+                    pid: std::process::id(),
+                },
+            )))
+            .unwrap();
+        let abandoned = store
+            .execute(&request(Operation::WorkerAbandon(WorkerAbandonInput {
+                execution_id: execution_id.clone(),
+                expected_revision: 3,
+            })))
+            .unwrap();
+        assert_eq!(abandoned["status"], "failed");
+        assert_eq!(abandoned["process"]["status"], "lost");
+        assert!(abandoned["process"]["ended_at"].is_string());
+        assert_eq!(abandoned["task_state"], "blocked");
+        assert_eq!(abandoned["result"]["process_lost"], true);
+        assert_eq!(abandoned["result"]["process_signal_sent"], false);
+        assert_eq!(abandoned["result"]["repository_mutation"], false);
+        let history = store
+            .execute(&request(Operation::WorkerExecutionHistory {
+                execution_id: execution_id.clone(),
+                after: 0,
+                limit: 20,
+            }))
+            .unwrap();
+        assert_eq!(
+            history["items"].as_array().unwrap().last().unwrap()["action"],
+            "worker.abandoned"
+        );
+        std::fs::remove_dir_all(root.join("worktree")).unwrap();
+        let cleaned = store
+            .execute(&request(Operation::WorkerWorkspaceCleanup(
+                WorkerWorkspaceCleanupInput {
+                    execution_id,
+                    expected_revision: 4,
+                },
+            )))
+            .unwrap();
+        assert_eq!(cleaned["workspace"]["status"], "removed");
+    }
+
+    #[test]
+    fn abandoning_before_process_attachment_blocks_the_assigned_task() {
+        let (_dir, _lock, mut store, project) = fixture();
+        let task = ready(&mut store, &project, "Pre-process failure");
+        let leased = store
+            .execute(&request(Operation::WorkerLease(lease(
+                &task,
+                "process-a",
+                120,
+                2,
+            ))))
+            .unwrap();
+        let execution_id = leased["id"].as_str().unwrap().to_owned();
+        let abandoned = store
+            .execute(&request(Operation::WorkerAbandon(WorkerAbandonInput {
+                execution_id,
+                expected_revision: 1,
+            })))
+            .unwrap();
+        assert_eq!(abandoned["status"], "failed");
+        assert_eq!(abandoned["process"], Value::Null);
+        assert_eq!(abandoned["task_state"], "blocked");
+        assert_eq!(abandoned["result"]["process_lost"], false);
     }
 
     #[test]

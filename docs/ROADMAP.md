@@ -54,8 +54,10 @@ recover after an actual runtime kill/restart; CLI and MCP reads agree. The separ
 `workers run` supervisor creates a detached worktree, runs the deterministic helper
 in its own process group, records bounded artifact evidence, maps exit status to a
 task transition, and retains the worktree for explicit cleanup. CLI and MCP reads
-expose workspace/process metadata. This is not a sandbox, provider call, test runner
-or independent review.
+expose workspace/process metadata. A killed supervisor can be reconciled explicitly
+with `workers abandon`; stale process rows become `lost` and cleanup becomes possible
+without signaling an unverified PID. This is not a sandbox, provider call, automatic
+reaper, test runner or independent review.
 
 Next vertical slice: a provider adapter under the same owner-run supervisor and
 worktree boundary, with explicit budgets, cancellation and reconciliation of

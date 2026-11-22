@@ -3,8 +3,8 @@ use crate::github::{GithubIdentityAttach, GithubIdentityRevoke, GithubIdentitySt
 use crate::personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate};
 use crate::tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition};
 use crate::workers::{
-    WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
-    WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerReleaseInput,
+    WorkerAbandonInput, WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput,
+    WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerReleaseInput,
     WorkerWorkspaceCleanupInput, WorkerWorkspaceInput,
 };
 use rmcp::schemars;
@@ -164,6 +164,7 @@ pub enum Operation {
     WorkerWorkspaceStart(WorkerWorkspaceInput),
     WorkerProcessAttach(WorkerProcessAttachInput),
     WorkerProcessFinish(WorkerProcessFinishInput),
+    WorkerAbandon(WorkerAbandonInput),
     WorkerWorkspaceCleanup(WorkerWorkspaceCleanupInput),
     WorkerRecover,
 }
@@ -192,6 +193,7 @@ impl Operation {
                 | Self::WorkerWorkspaceStart(_)
                 | Self::WorkerProcessAttach(_)
                 | Self::WorkerProcessFinish(_)
+                | Self::WorkerAbandon(_)
                 | Self::WorkerWorkspaceCleanup(_)
                 | Self::WorkerRecover
         )

@@ -39,6 +39,7 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
 | `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state; a running supervised process blocks release. |
 | `workers run --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, run the deterministic mock helper under supervision, and finalize evidence. |
+| `workers abandon --execution ID [--force]` | Reconcile a crashed supervisor: mark a running process `lost`, block its task, and leave the worktree for explicit cleanup. Refuses while the recorded PID exists unless forced. |
 | `workers cleanup --execution ID` | Remove a retained non-active worktree, prune Git metadata, and mark the workspace removed. |
 | `workers recover` | Expire overdue leases; a task with a running supervised process becomes blocked instead of requeued. |
 | `history [--project ID] [--after N] [--limit N]` | Retrieve committed events, optionally project-scoped. |
@@ -62,10 +63,10 @@ IPC-backed commands return `{version, request_id, result}` or
 `{version, request_id, error: {code, message}}`. Expected domain errors have codes
 `invalid_request`, `not_found`, `conflict`, or `integrity_error`; unexpected storage failures return
 `internal_error` without request contents. Pre-IPC failures return `command_failed`.
-`init` and `doctor` return command-specific diagnostic objects. `workers run` and
-`workers cleanup` are owner-run composites and emit only `{result}`. Clap syntax
-errors use its standard stderr output and exit status 2. All operational failures
-exit 1.
+`init` and `doctor` return command-specific diagnostic objects. `workers run`,
+`workers abandon` and `workers cleanup` are owner-run composites and emit only
+`{result}`. Clap syntax errors use its standard stderr output and exit status 2. All
+operational failures exit 1.
 
 `doctor` exits 1 if the service is stopped, even if offline checks pass. It does
 not fix permissions or create a missing database. `init` refuses to run against
@@ -106,6 +107,9 @@ Worker leases default to 120 seconds and four active leases. Leases coordinate
 owner-run runners inside Mother's database; they are not OS locks, identity proof or
 write authorization. `workers run` is a separate owner-run supervisor for a fixed
 deterministic helper in an isolated Git worktree; it is not a sandbox or provider
-adapter. `workers mock` records a checkpoint without launching a process. Retained
-worktrees require explicit `workers cleanup`. See
+adapter. `workers mock` records a checkpoint without launching a process. If a
+supervisor is killed, `workers abandon` marks the process `lost` without signaling an
+unverified PID; use `--force` only after confirming the recorded PID is gone or
+belongs to the abandoned helper. Retained worktrees require explicit
+`workers cleanup`. See
 [worker operations](ORCHESTRATION.md#worker-execution-leases).

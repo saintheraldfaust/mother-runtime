@@ -114,7 +114,8 @@ supervisor: it creates an isolated Git worktree, starts a deterministic helper,
 heartbeats the lease, records bounded artifact evidence, and retains the worktree
 for inspection. The runtime itself never launches a process. A lease does not grant
 identity, authorize project-repository writes or complete a task; a worktree prevents
-checkout collisions but is not a sandbox.
+checkout collisions but is not a sandbox. Owner-run abandonment can mark a crashed
+supervisor's process `lost`; MCP only reads the resulting state.
 
 ## Transport and failure behavior
 

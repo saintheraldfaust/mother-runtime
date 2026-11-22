@@ -8,7 +8,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The suite contains 34 unit tests and twelve process integration tests.
+The suite contains 37 unit tests and thirteen process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -33,7 +33,8 @@ Unit coverage:
   active bindings, and preserve immutable authorization/revocation revisions.
   Schema 4→5 upgrade preserves personas and adds identity tables. Schema 5→6
   preserves identities and adds worker lease tables. Schema 6→7 preserves leases
-  and adds workspace/process tables.
+  and adds workspace/process tables. Schema 7→8 preserves process records and
+  permits the explicit `lost` state.
 - Worker eligibility excludes tasks with incomplete dependencies or an unexpired
   lease. One active lease per task and the global `max_active` bound are enforced.
 - Heartbeats extend leases and reject stale revisions. Expired leases are recovered
@@ -45,6 +46,8 @@ Unit coverage:
   writes project completion evidence.
 - Lease recovery blocks a running supervised task instead of requeueing it, while
   allowing the process finish to preserve expired status and evidence.
+- Abandonment marks a running process `lost`, blocks its task, records an immutable
+  event, permits explicit worktree cleanup, and also blocks pre-process failures.
 
 Process integration coverage:
 
@@ -61,6 +64,9 @@ Process integration coverage:
   worktree, writes only its fixed artifact there, records log/process evidence, and
   transitions the task to `awaiting_input` without touching the project checkout or
   completing the task.
+- Kill the actual owner-run supervisor, wait for the helper to exit, then use
+  `workers abandon` to mark the stale process `lost`, block the task, and remove the
+  retained worktree through `workers cleanup`.
 - Refuse to replace a regular file at the socket path and refuse insecure
   directory permissions. `doctor` reports missing state without initializing it.
 
@@ -136,7 +142,7 @@ macOS and Linux validation; no hosted CI run is claimed. No interactive
 coding-assistant host, coding provider, mandatory-persona authorization, real GitHub
 account login, GitHub write, credential broker, remote workflow, provider worker,
 sandbox isolation, worker-executed tests, performance target, power-loss, or hostile
-same-UID isolation test has been performed. Supervisor-crash orphan reaping is not
-implemented. The supervised process test uses a deterministic local helper, not a
-model provider. GitHub identity coverage uses a
+same-UID isolation test has been performed. Abandonment is explicit rather than an
+automatic reaper, and PID liveness/PID reuse cannot be certified. The supervised
+process test uses a deterministic local helper, not a model provider. GitHub identity coverage uses a
 fake `gh`; it is not certification with a real account.
