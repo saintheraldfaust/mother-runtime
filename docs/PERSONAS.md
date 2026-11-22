@@ -4,9 +4,10 @@ Personas are durable engineering identities stored by the runtime. They are not
 model prompts, host assistants or worker processes. A persona is separate from the
 provider that might eventually execute its work.
 
-The current implementation provides a versioned registry and runtime capability
-checks for persona-attributed task operations. It does not dispatch workers, verify
-GitHub accounts or prove that a host assistant followed the persona instructions.
+The current implementation provides a versioned registry, runtime capability
+checks for persona-attributed task operations, and read-only verified GitHub
+identity records bound to personas. It does not dispatch workers, expose GitHub
+credentials or prove that a host assistant followed persona instructions.
 
 ## Data model
 
@@ -17,7 +18,8 @@ Each persona stores:
 - Operational capabilities from the supported set.
 - Optional project scope.
 - Preferred coding-agent runtime label.
-- Self-reported GitHub identity label, explicitly marked unverified.
+- Self-reported GitHub identity label, explicitly marked unverified; an owner-run
+  CLI flow can separately bind a verified read-only identity record.
 - Context retrieval description.
 - Review requirement, concurrency limit and optional budget.
 - Status (`active`, `disabled`, `archived`), revision and timestamps.
@@ -34,7 +36,8 @@ Supported capabilities:
 | `task.transition` | Persona-attributed task state transitions. |
 | `task.checkpoint` | Persona-attributed task checkpoints. |
 | `persona.manage` | Reserved for future management authorization. |
-| `github.read` / `github.write` | Reserved; GitHub operations are not implemented. |
+| `github.read` | Required to bind a verified read-only GitHub identity; future read operations. |
+| `github.write` | Reserved; GitHub writes are not implemented. |
 
 A declared capability is necessary but not sufficient for a protected operation.
 The operation's existing revision, state and evidence checks still apply.
@@ -85,5 +88,6 @@ same-UID process. See [security model](SECURITY.md).
 
 ## Planned work
 
-Worker execution, verified GitHub identity binding, independent review enforcement
-and cross-assistant persona continuation remain future milestones.
+Worker execution, GitHub write authorization and brokering, independent review
+enforcement and cross-assistant persona continuation remain future milestones.
+Verified read-only identity binding is documented in [GitHub identities](IDENTITIES.md).

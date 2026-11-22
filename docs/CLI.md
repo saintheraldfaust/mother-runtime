@@ -37,6 +37,12 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `personas edit --persona ID --expected-revision N --file FILE` | Replace a persona definition, rejecting a stale revision. |
 | `personas disable/enable/archive --persona ID --expected-revision N` | Change status with an immutable audit revision; archived is the safe deletion path. |
 | `personas history --persona ID [--after N] [--limit N]` | Retrieve immutable persona revision snapshots. |
+| `github profile [--host HOST]` | Create an isolated, private GitHub CLI profile directory; no login is performed. |
+| `github connect --profile ID [--host HOST] --persona ID --expected-persona-revision N` | Run one read-only `gh api user` check in that profile and record the verified identity. |
+| `github list [--status STATUS] [--persona ID] [--after N] [--limit N]` | Page through verified identity metadata; no credentials are returned. |
+| `github inspect --identity ID` | Read one identity, its persona binding, verification metadata and limits. |
+| `github revoke --identity ID --expected-revision N` | Revoke future authorized use while preserving immutable history. |
+| `github history --identity ID [--after N] [--limit N]` | Retrieve immutable identity authorization revisions. |
 
 Kinds: `fact`, `observation`, `failure`, `blocker`, `objective`. All are unverified
 submissions. The kind does not imply authorization or evidence.
@@ -77,3 +83,8 @@ include `persona: {"persona_id":"...","expected_revision":N}`; the CLI transitio
 form uses `--persona` and `--expected-persona-revision`. The runtime checks the
 latest persona revision, active status, project scope and capability. Omitting the
 assertion uses the existing local-operator path. See [personas](PERSONAS.md).
+
+GitHub account setup is owner-run and read-only. `github profile` creates a
+private profile directory; the account owner completes `gh auth login` with
+`GH_CONFIG_DIR` set to it; `github connect` verifies the account and records the
+identity. No token is stored or returned. See [GitHub identities](IDENTITIES.md).

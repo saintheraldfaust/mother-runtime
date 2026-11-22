@@ -7,11 +7,11 @@ local project/context workflow, with verified restart and multiple-process acces
 | --- | --- | --- |
 | 1: foundation | Implemented | Continue extending diagnostics with new subsystems. |
 | 2: persistent runtime | Initial slice verified | Background lifecycle integration; domain entities grow with later slices. |
-| 3: MCP | Core bridge verified; persona tools added | Interactive host certification. |
+| 3: MCP | Core bridge verified; persona and read-only identity tools added | Interactive host certification. |
 | 4: continuity | Tasks, checkpoints, decisions and handoffs verified | Persona/policy/Git scopes in execution snapshots; verified tests/reviews/approvals. |
 | 5: personas | Registry, revisions, status and asserted capability gates verified | Mandatory-persona client model, notification/refresh certification, worker handoff. |
-| 6: GitHub accounts | Pending | Human-authorized connections, broker, identity isolation and revocation. |
-| 7–9: execution/workflow | Host-tracked task machine only | Scheduling/leases, provider adapter, authorized GitHub workflow. |
+| 6: GitHub accounts | Read-only profile verification, identity records and revocation verified with a fake `gh` | Real-account certification, repository/action scopes, credential broker, write authentication, Git push isolation. |
+| 7–9: execution/workflow | Host-tracked task machine only | Deterministic worker, scheduling/leases, provider adapter, authorized GitHub workflow. |
 | 10–12: TUI/hardening/release | Pending | Ratatui, cross-provider validation, packaging, release readiness. |
 
 MCP evidence: two independent rmcp clients launch separate bridge processes, use
@@ -39,11 +39,18 @@ capability. Transition records retain the authorizing persona revision. The pers
 assertion is optional, so this is runtime policy enforcement for asserted operations,
 not mandatory authenticated authorization.
 
-Next vertical slice: authorized GitHub identity records and a trusted, read-only
-authentication/broker boundary. Do not add GitHub writes or workers until account
-authorization, revocation and operation scoping are verified. Real-host
-cross-assistant certification remains required before claiming cross-provider
-continuity.
+GitHub identity evidence: an isolated profile is created under private state; a fake
+`gh` verifies the configured account while token environment variables are removed;
+CLI and MCP reads expose the active record; revocation takes effect immediately and
+immutable authorization history remains readable. This uses a fake executable, not
+a real account, and covers no broker, repository/action scope, Git push or GitHub
+write.
+
+Next vertical slice: a deterministic mock worker with dependency-aware scheduling,
+leases and crash recovery. Keep GitHub writes, credential brokering and independent
+review gates separate until their authorization and reconciliation boundaries are
+verified. Real-host cross-assistant certification remains required before claiming
+cross-provider continuity.
 
 Before optional features, complete competitive analysis as required by the directive.
 Performance targets remain targets until representative benchmarks are recorded.

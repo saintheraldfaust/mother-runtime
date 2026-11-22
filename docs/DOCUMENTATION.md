@@ -17,8 +17,9 @@ external-source content, not automatically by its filename.
 | [DECISIONS/0002-continuity-packages.md](DECISIONS/0002-continuity-packages.md) | Public — Public data-model decision; no private session contents. |
 | [DECISIONS/0003-host-tracked-tasks.md](DECISIONS/0003-host-tracked-tasks.md) | Public — Public task/verifier architecture and supported limitations. |
 | [DECISIONS/0004-persona-policy.md](DECISIONS/0004-persona-policy.md) | Public — Public persona/revision/capability architecture and remaining limits. |
+| [DECISIONS/0005-github-identity-boundary.md](DECISIONS/0005-github-identity-boundary.md) | Public — Public read-only identity verification boundary and limits. |
 | [DOCUMENTATION.md](DOCUMENTATION.md) | Public — Public classification inventory and contributor guidance. |
-| [IDENTITIES.md](IDENTITIES.md) | Public — Public unsupported-feature status and future authorization requirements. |
+| [IDENTITIES.md](IDENTITIES.md) | Public — Public read-only identity setup, stored metadata, revocation and limits. |
 | [LICENSING.md](LICENSING.md) | Public — Public license provenance and third-party notice obligations. |
 | [MCP.md](MCP.md) | Public — Public schemas and opt-in placeholder host configurations. |
 | [ORCHESTRATION.md](ORCHESTRATION.md) | Public — Public state machine, evidence scope and sanitized examples. |

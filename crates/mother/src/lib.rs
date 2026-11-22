@@ -4,6 +4,7 @@ compile_error!("Mother currently requires macOS or Linux Unix domain sockets");
 pub mod config;
 pub mod continuity;
 mod evidence;
+pub mod github;
 pub mod mcp;
 pub mod personas;
 pub mod protocol;

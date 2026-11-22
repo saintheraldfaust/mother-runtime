@@ -42,9 +42,10 @@ The current implementation includes:
 - Revision checks and idempotent writes.
 - Runtime diagnostics.
 - Versioned personas with immutable history and runtime capability checks for asserted task operations.
+- Read-only verified GitHub identity records with isolated CLI profiles, persona binding, revocation, and no stored tokens.
 - An MCP stdio bridge implemented using the official Rust SDK.
 
-Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients; no real coding-assistant host has yet been certified.
+Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; no real account or coding-assistant host has yet been certified.
 
 Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
 
@@ -56,7 +57,7 @@ Mother's next engineering milestones include:
 
 **Cross-assistant continuity:** Verified retrieval and continuation of engineering state across supported coding clients.
 
-**GitHub identities:** Separate GitHub user accounts, explicitly authorized by their legitimate owners and associated with configured engineering personas.
+**GitHub identities:** Expand read-only verified account records into repository/action scopes, a credential broker, write authorization, and reconciliation without exposing tokens to agents.
 
 **Independent workers:** Specialized coding agents operating through supported provider runtimes and isolated execution environments.
 

@@ -380,7 +380,7 @@ async fn mcp_shared_state_scenario() {
         rmcp::model::ProtocolVersion::V_2025_11_25
     );
     let tools = a.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 26);
+    assert_eq!(tools.len(), 29);
     assert!(tools.iter().all(|t| t.output_schema.is_some()));
     let write_tool = tools
         .iter()
@@ -488,7 +488,7 @@ async fn mcp_shared_state_scenario() {
         "CLI test failed"
     );
     assert_eq!(b.list_all_resources().await.unwrap().len(), 1);
-    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 5);
+    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 6);
     let resource = b
         .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
             "mother://projects/{id}/context"
@@ -1339,5 +1339,160 @@ async fn persona_live_policy_scenario() {
     assert_eq!(history["result"]["items"].as_array().unwrap().len(), 2);
     a.cancel().await.ok();
     b.cancel().await.ok();
+    service.stop();
+}
+
+#[tokio::test]
+async fn github_identity_verification_is_read_only_and_revocable() {
+    tokio::time::timeout(Duration::from_secs(45), github_identity_scenario())
+        .await
+        .expect("GitHub identity scenario timed out");
+}
+
+async fn github_identity_scenario() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut service = Runtime::start(&dir);
+
+    let persona_file = temp.path().join("github-persona.json");
+    std::fs::write(
+        &persona_file,
+        serde_json::to_vec(&serde_json::json!({
+            "name":"account-reviewer",
+            "role":"review_engineer",
+            "description":"Reviews work through a read-only GitHub identity",
+            "capabilities":["github.read"],
+            "review_required":false,
+            "max_concurrency":1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let persona = success(
+        &dir,
+        &[
+            "personas",
+            "create",
+            "--file",
+            persona_file.to_str().unwrap(),
+        ],
+    );
+    let persona_id = persona["result"]["id"].as_str().unwrap().to_owned();
+
+    let profile = success(&dir, &["github", "profile", "--host", "github.com"]);
+    let profile_id = profile["profile_id"].as_str().unwrap().to_owned();
+    let config_dir = profile["config_dir"].as_str().unwrap();
+    assert!(Path::new(config_dir).is_dir());
+
+    let gh = temp.path().join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n[ -z \"$GH_TOKEN\" ] || exit 7\n[ -z \"$GITHUB_TOKEN\" ] || exit 8\nprintf '%s' '{\"login\":\"alice\",\"id\":4242,\"name\":\"Alice Example\",\"type\":\"User\"}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let connected = Command::new(env!("CARGO_BIN_EXE_motherctl"))
+        .arg("--data-dir")
+        .arg(&dir)
+        .arg("--json")
+        .args([
+            "github",
+            "connect",
+            "--profile",
+            &profile_id,
+            "--host",
+            "github.com",
+            "--persona",
+            &persona_id,
+            "--expected-persona-revision",
+            "1",
+        ])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                temp.path().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("GH_TOKEN", "must-not-leak")
+        .output()
+        .unwrap();
+    assert!(
+        connected.status.success(),
+        "stdout={}, stderr={}",
+        String::from_utf8_lossy(&connected.stdout),
+        String::from_utf8_lossy(&connected.stderr)
+    );
+    let identity: Value = serde_json::from_slice(&connected.stdout).unwrap();
+    let identity_id = identity["result"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(identity["result"]["login"], "alice");
+    assert_eq!(identity["result"]["account_id"], 4242);
+    assert_eq!(identity["result"]["status"], "active");
+    assert_eq!(
+        identity["result"]["verification"]["credentials_stored"],
+        false
+    );
+    assert!(!String::from_utf8_lossy(&connected.stdout).contains("must-not-leak"));
+
+    let client = mcp_client(&dir, false).await;
+    let listed = tool(
+        &client,
+        "mother_github_identities_list",
+        serde_json::json!({"status":"active","persona_id":persona_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(listed["result"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["result"]["items"][0]["id"], identity_id);
+    let fetched = tool(
+        &client,
+        "mother_github_identity_get",
+        serde_json::json!({"identity_id":identity_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(fetched["result"]["persona_id"], persona_id);
+    assert_eq!(fetched["result"]["current_persona_status"], "active");
+
+    let revoked = success(
+        &dir,
+        &[
+            "github",
+            "revoke",
+            "--identity",
+            &identity_id,
+            "--expected-revision",
+            "1",
+        ],
+    );
+    assert_eq!(revoked["result"]["status"], "revoked");
+    assert_eq!(revoked["result"]["revision"], 2);
+    let after = tool(
+        &client,
+        "mother_github_identity_get",
+        serde_json::json!({"identity_id":identity_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(after["result"]["status"], "revoked");
+    let active = tool(
+        &client,
+        "mother_github_identities_list",
+        serde_json::json!({"status":"active"}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(active["result"]["items"].as_array().unwrap().len(), 0);
+    let history = success(&dir, &["github", "history", "--identity", &identity_id]);
+    assert_eq!(history["result"]["items"].as_array().unwrap().len(), 2);
+
+    client.cancel().await.ok();
     service.stop();
 }

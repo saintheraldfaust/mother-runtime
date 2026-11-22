@@ -8,7 +8,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The suite contains 20 unit tests and nine process integration tests.
+The suite contains 27 unit tests and ten process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -26,6 +26,12 @@ Unit coverage:
 - Persona-attributed task operations enforce live capabilities and record persona
   attribution; stale and revoked policies are rejected. Schema 3→4 upgrade
   preserves a task and adds the persona tables.
+- GitHub verification command construction uses the isolated profile and explicitly
+  removes token environment variables. Public account-response parsing rejects
+  malformed, organization and invalid-ID responses.
+- GitHub identity records require an active `github.read` persona, reject duplicate
+  active bindings, and preserve immutable authorization/revocation revisions.
+  Schema 4→5 upgrade preserves personas and adds identity tables.
 
 Process integration coverage:
 
@@ -93,6 +99,13 @@ Task and evidence coverage:
 - Byte-limited context pagination returns a cursor and recovers all 60 large records
   across pages without gaps. The suite still exercises prior migrations and handoffs.
 
+GitHub identity process coverage:
+
+- A CLI-created `github.read` persona and isolated profile are verified through a
+  fake `gh` executable that fails if token environment variables leak. Two MCP
+  clients read the active identity, and revocation is visible immediately while
+  immutable authorization history remains readable.
+
 Persona process coverage:
 
 - A CLI-created persona is read by two independent MCP clients. Editing it through
@@ -103,7 +116,7 @@ Persona process coverage:
 
 Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
 macOS and Linux validation; no hosted CI run is claimed. No interactive coding-assistant host, coding
-provider, mandatory-persona authorization, remote GitHub workflow, independent-worker
-recovery, performance target, power-loss, or hostile same-UID isolation test has
-been performed. Persona coverage is local CLI/MCP policy enforcement, not real-host
-identity certification.
+provider, mandatory-persona authorization, real GitHub account login, GitHub write,
+credential broker, remote workflow, independent-worker recovery, performance target,
+power-loss, or hostile same-UID isolation test has been performed. GitHub identity
+coverage uses a fake `gh`; it is not certification with a real account.

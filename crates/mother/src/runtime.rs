@@ -200,6 +200,8 @@ pub async fn doctor(dir: &Path) -> Value {
     }
     let configuration = Config::load(dir);
     checks.push(json!({"check":"configuration","ok":configuration.is_ok(),"detail":configuration.err().map(|e|e.to_string())}));
+    let github_profiles = config::check_github_profiles(dir);
+    checks.push(json!({"check":"github_profiles","ok":github_profiles.is_ok(),"detail":github_profiles.err().map(|e|e.to_string())}));
     let database = (|| -> Result<Value> {
         let path = dir.join("mother.db");
         config::read_private_file(&path)?;

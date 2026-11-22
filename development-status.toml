@@ -1,15 +1,15 @@
 format_version = 1
 updated_on = "2026-11-21"
 directive = "MOTHER.md"
-milestone = "Versioned persona registry, live capability gates, and implementation audit"
-next_objective = "Implement authorized GitHub identity records and a trusted read-only authentication boundary before workers or GitHub writes"
+milestone = "Read-only verified GitHub identity records, persona binding, revocation, and implementation audit"
+next_objective = "Implement a deterministic mock worker with dependency-aware scheduling, leases and crash recovery; keep GitHub writes and credential brokering separate"
 
 [implemented]
 cargo_workspace = true
 motherctl_cli = true
 strict_versioned_toml = true
 structured_errors_and_logging = true
-sqlite_migrations_v1_v2_v3 = true
+sqlite_migrations_v1_through_v5 = true
 host_tracked_task_contracts = true
 explicit_task_state_machine = true
 immutable_task_checkpoints_and_transition_history = true
@@ -49,12 +49,19 @@ persona_project_scope = true
 task_persona_capability_checks = true
 persona_attribution_on_task_mutations = true
 persona_mcp_tools_and_resource = true
+github_identity_records = true
+github_isolated_gh_profiles = true
+github_read_only_account_verification = true
+github_identity_immutable_revisions_and_audit = true
+github_identity_persona_binding = true
+github_identity_revocation = true
+github_identity_mcp_read_tools = true
 
 [verification]
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 20
-process_integration_tests = 9
+unit_tests = 27
+process_integration_tests = 10
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
@@ -90,6 +97,10 @@ coverage = [
   "Asserted task operations use current persona revision, scope and capability",
   "Stale and revoked persona policy rejects independent MCP clients while history remains readable",
   "Schema-3 upgrade preserves tasks and adds persona tables",
+  "Schema-4 upgrade preserves personas and adds GitHub identity tables",
+  "Read-only gh verification uses an isolated profile and removes token environment variables",
+  "GitHub identities require an active github.read persona and one active identity per persona",
+  "Identity revocation is revisioned, immediately visible to MCP clients, and history remains immutable",
 ]
 hosted_ci_executed = false
 linux_executed = false
@@ -100,6 +111,8 @@ interactive_host_tested = false
 real_provider_tested = false
 real_github_tested = false
 real_client_cross_assistant_tested = false
+real_github_account_verified = false
+github_credential_broker_tested = false
 representative_performance_measured = false
 
 [audit_2026_11_20]
@@ -109,6 +122,7 @@ verified = [
   "Revision checks, idempotent writes, diagnostics and MCP bridge",
   "Two SDK MCP lifecycles and restart recovery in process tests",
   "Persona registry, immutable revisions, status changes and asserted capability gates",
+  "Read-only GitHub identity profile verification, records, persona binding and revocation",
 ]
 incomplete = [
   "Handoff claims coordinate continuation but grant no execution ownership or lease",
@@ -117,7 +131,7 @@ incomplete = [
 ]
 not_implemented = [
   "Real-host Codex/Claude Code/Copilot certification",
-  "Verified GitHub accounts, credential broker and revocation",
+  "Credential broker, real-account certification, repository/action scopes and GitHub writes",
   "Independent workers, scheduling, worktree isolation and GitHub review lifecycle",
   "Ratatui interface and human approval records",
 ]
@@ -126,7 +140,7 @@ not_implemented = [
 phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
 phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona change notification/refresh certification", "Per-operation typed result schemas beyond the response envelope"]
 phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling", "Handoff execution ownership/leases separate from readable history"]
-later = ["Authorized GitHub identities and broker", "Mandatory authenticated persona assertions", "Durable task scheduling", "Coding-agent adapter and mock worker", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
+later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Worktree isolation and identity-safe Git operations", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
 
 [limitations]
 trust_boundary = "Same OS user; all current clients have local operator authority"
@@ -144,6 +158,12 @@ persona_authorization_implemented = "optional_asserted_task_operations"
 mandatory_persona_authorization = false
 persona_identity_verified = false
 workers_implemented = false
-github_authentication_implemented = false
+scheduling_implemented = false
+leases_implemented = false
+github_identity_records_implemented = true
+github_identity_verification = "read_only_cli_gh_api_user"
+github_credential_broker_implemented = false
+github_writes_implemented = false
+real_github_account_verified = false
 remote_writes_performed = false
 license = "Apache-2.0"

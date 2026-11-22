@@ -2,6 +2,9 @@ use clap::{Parser, Subcommand};
 use mother_runtime::{
     Error, Result, config,
     continuity::{DecisionInput, HandoffInput},
+    github::{
+        self, GithubIdentityAttach, GithubIdentityRevoke, GithubIdentityStatus, GithubOperation,
+    },
     mcp,
     personas::{PersonaClaim, PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate},
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request},
@@ -53,6 +56,8 @@ enum Command {
     Tasks(Tasks),
     #[command(subcommand)]
     Personas(Personas),
+    #[command(subcommand)]
+    Github(Github),
     History {
         #[arg(long)]
         project: Option<String>,
@@ -296,6 +301,55 @@ enum Personas {
     },
 }
 
+#[derive(Subcommand)]
+enum Github {
+    /// Create an isolated, empty GitHub CLI profile directory.
+    Profile {
+        #[arg(long, default_value = "github.com")]
+        host: String,
+    },
+    /// Verify a completed gh login read-only and record its authorized identity.
+    Connect {
+        #[arg(long)]
+        profile: String,
+        #[arg(long, default_value = "github.com")]
+        host: String,
+        #[arg(long)]
+        persona: String,
+        #[arg(long)]
+        expected_persona_revision: u64,
+    },
+    List {
+        #[arg(long, value_enum)]
+        status: Option<GithubIdentityStatus>,
+        #[arg(long)]
+        persona: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    Inspect {
+        #[arg(long)]
+        identity: String,
+    },
+    /// Stop future operations for an identity without deleting history.
+    Revoke {
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        expected_revision: u64,
+    },
+    History {
+        #[arg(long)]
+        identity: String,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+}
+
 fn persona_claim(
     persona: Option<String>,
     expected_revision: Option<u64>,
@@ -370,6 +424,46 @@ async fn run(cli: Cli) -> Result<bool> {
             let ok = result["ok"] == true;
             output(&result, cli.json)?;
             Ok(ok)
+        }
+        Command::Github(Github::Profile { host }) => {
+            if !github::valid_host(&host) {
+                return Err(Error::Invalid(
+                    "GitHub host must be a lowercase DNS hostname without a scheme or path".into(),
+                ));
+            }
+            let profile_id = uuid::Uuid::new_v4().to_string();
+            let profile_dir = config::github_profile(&dir, &profile_id)?;
+            output(
+                &serde_json::json!({
+                    "profile_id":profile_id,
+                    "host":host,
+                    "config_dir":profile_dir,
+                    "credentials_stored":false,
+                    "next_action":"Set GH_CONFIG_DIR to config_dir, run gh auth login --hostname host yourself, then run motherctl github connect with this profile ID."
+                }),
+                cli.json,
+            )?;
+            Ok(true)
+        }
+        Command::Github(Github::Connect {
+            profile,
+            host,
+            persona,
+            expected_persona_revision,
+        }) => {
+            let profile_dir = config::existing_github_profile(&dir, &profile)?;
+            let account = github::verify(&profile_dir, &host, std::path::Path::new("gh"))?;
+            let operation = Operation::GithubIdentityAttach(GithubIdentityAttach {
+                profile_id: profile,
+                host,
+                login: account.login,
+                account_id: account.account_id,
+                display_name: account.display_name,
+                persona_id: persona,
+                expected_persona_revision,
+                operations: vec![GithubOperation::Read],
+            });
+            submit(&dir, cli.request_id, operation, cli.json).await
         }
         command => {
             let operation = match command {
@@ -589,21 +683,58 @@ async fn run(cli: Cli) -> Result<bool> {
                     after,
                     limit,
                 },
+                Command::Github(Github::List {
+                    status,
+                    persona,
+                    after,
+                    limit,
+                }) => Operation::GithubIdentitiesList {
+                    status,
+                    persona_id: persona,
+                    after,
+                    limit,
+                },
+                Command::Github(Github::Inspect { identity }) => Operation::GithubIdentityGet {
+                    identity_id: identity,
+                },
+                Command::Github(Github::Revoke {
+                    identity,
+                    expected_revision,
+                }) => Operation::GithubIdentityRevoke(GithubIdentityRevoke {
+                    identity_id: identity,
+                    expected_revision,
+                }),
+                Command::Github(Github::History {
+                    identity,
+                    after,
+                    limit,
+                }) => Operation::GithubIdentityHistory {
+                    identity_id: identity,
+                    after,
+                    limit,
+                },
                 _ => unreachable!(),
             };
-            let request = Request {
-                version: PROTOCOL_VERSION,
-                request_id: cli
-                    .request_id
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-                operation,
-            };
-            let response = runtime::call(&dir, &request).await?;
-            let ok = response.error.is_none();
-            output(&response, cli.json)?;
-            Ok(ok)
+            submit(&dir, cli.request_id, operation, cli.json).await
         }
     }
+}
+
+async fn submit(
+    dir: &std::path::Path,
+    request_id: Option<String>,
+    operation: Operation,
+    compact: bool,
+) -> Result<bool> {
+    let request = Request {
+        version: PROTOCOL_VERSION,
+        request_id: request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        operation,
+    };
+    let response = runtime::call(dir, &request).await?;
+    let ok = response.error.is_none();
+    output(&response, compact)?;
+    Ok(ok)
 }
 
 #[tokio::main(flavor = "current_thread")]

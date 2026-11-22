@@ -2,6 +2,7 @@
 use crate::{
     Error, Result,
     continuity::{DecisionInput, HandoffInput},
+    github::GithubIdentityStatus,
     personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate},
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request, Response},
     runtime,
@@ -163,6 +164,32 @@ struct PersonaHistoryPage {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct GithubIdentityId {
+    identity_id: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GithubIdentityPage {
+    status: Option<GithubIdentityStatus>,
+    persona_id: Option<String>,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GithubIdentityHistoryPage {
+    identity_id: String,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CheckpointPage {
     task_id: String,
     #[serde(default)]
@@ -295,7 +322,7 @@ fn tools() -> Vec<Tool> {
         ),
         tool::<PersonaPage>(
             "mother_personas_list",
-            "List durable personas, optionally filtered by status or project scope. GitHub identity labels are self-reported until account verification is implemented.",
+            "List durable personas, optionally filtered by status or project scope. Persona github_identity labels remain self-reported; check verified GitHub identity records separately.",
             true,
         ),
         tool::<PersonaId>(
@@ -321,6 +348,21 @@ fn tools() -> Vec<Tool> {
         tool::<PersonaHistoryPage>(
             "mother_persona_history",
             "Read immutable persona revision history with sequence pagination.",
+            true,
+        ),
+        tool::<GithubIdentityPage>(
+            "mother_github_identities_list",
+            "List read-only verified GitHub account authorization records. No tokens or credential values are exposed.",
+            true,
+        ),
+        tool::<GithubIdentityId>(
+            "mother_github_identity_get",
+            "Read one verified GitHub identity record, its persona binding, revocation state and verification limits.",
+            true,
+        ),
+        tool::<GithubIdentityHistoryPage>(
+            "mother_github_identity_history",
+            "Read immutable GitHub identity authorization revision history.",
             true,
         ),
     ]
@@ -390,7 +432,7 @@ impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("mother",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. This build supports no independent workers, verified GitHub identities, or GitHub writes.")
+            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed, and this build supports no GitHub writes or independent workers.")
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -635,6 +677,38 @@ impl ServerHandler for Bridge {
                     None,
                 )
             }
+            "mother_github_identities_list" => {
+                let p: GithubIdentityPage = parse(args)?;
+                (
+                    Operation::GithubIdentitiesList {
+                        status: p.status,
+                        persona_id: p.persona_id,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
+            "mother_github_identity_get" => {
+                let p: GithubIdentityId = parse(args)?;
+                (
+                    Operation::GithubIdentityGet {
+                        identity_id: p.identity_id,
+                    },
+                    None,
+                )
+            }
+            "mother_github_identity_history" => {
+                let p: GithubIdentityHistoryPage = parse(args)?;
+                (
+                    Operation::GithubIdentityHistory {
+                        identity_id: p.identity_id,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
             _ => {
                 return Err(ErrorData::new(
                     ErrorCode::METHOD_NOT_FOUND,
@@ -697,6 +771,11 @@ impl ServerHandler for Bridge {
                 .with_mime_type("application/json"),
                 ResourceTemplate::new("mother://personas/{persona_id}", "Persona definition")
                     .with_mime_type("application/json"),
+                ResourceTemplate::new(
+                    "mother://github-identities/{identity_id}",
+                    "Verified GitHub identity record",
+                )
+                .with_mime_type("application/json"),
             ],
             ..Default::default()
         })
@@ -742,6 +821,14 @@ fn resource_operation(uri: &str) -> std::result::Result<Operation, ErrorData> {
     {
         return Ok(Operation::PersonaGet {
             persona_id: id.into(),
+        });
+    }
+    if let Some(id) = uri.strip_prefix("mother://github-identities/")
+        && let Ok(uuid) = uuid::Uuid::parse_str(id)
+        && uuid.to_string() == id
+    {
+        return Ok(Operation::GithubIdentityGet {
+            identity_id: id.into(),
         });
     }
     if let Some(id) = uri.strip_prefix("mother://handoffs/")

@@ -1,4 +1,5 @@
 use crate::continuity::{DecisionInput, HandoffInput};
+use crate::github::{GithubIdentityAttach, GithubIdentityRevoke, GithubIdentityStatus};
 use crate::personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate};
 use crate::tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition};
 use rmcp::schemars;
@@ -116,6 +117,22 @@ pub enum Operation {
         after: u64,
         limit: u32,
     },
+    GithubIdentityAttach(GithubIdentityAttach),
+    GithubIdentityRevoke(GithubIdentityRevoke),
+    GithubIdentityGet {
+        identity_id: String,
+    },
+    GithubIdentitiesList {
+        status: Option<GithubIdentityStatus>,
+        persona_id: Option<String>,
+        after: u64,
+        limit: u32,
+    },
+    GithubIdentityHistory {
+        identity_id: String,
+        after: u64,
+        limit: u32,
+    },
 }
 
 impl Operation {
@@ -133,6 +150,8 @@ impl Operation {
                 | Self::PersonaCreate(_)
                 | Self::PersonaUpdate(_)
                 | Self::PersonaSetStatus(_)
+                | Self::GithubIdentityAttach(_)
+                | Self::GithubIdentityRevoke(_)
         )
     }
 }

@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 mod continuity;
+mod github;
 mod personas;
 mod tasks;
 
@@ -45,6 +46,10 @@ impl Store {
             }
             if version < 4 {
                 transaction.execute_batch(include_str!("../migrations/004_personas.sql"))?;
+            }
+            if version < 5 {
+                transaction
+                    .execute_batch(include_str!("../migrations/005_github_identities.sql"))?;
             }
             transaction.commit()?;
         }
@@ -160,7 +165,7 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":false, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion"}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":false, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -343,6 +348,20 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             after,
             limit,
         } => personas::history(tx, persona_id, *after, *limit),
+        Operation::GithubIdentityAttach(input) => github::attach(tx, &request.request_id, input),
+        Operation::GithubIdentityRevoke(change) => github::revoke(tx, &request.request_id, change),
+        Operation::GithubIdentityGet { identity_id } => github::get(tx, identity_id),
+        Operation::GithubIdentitiesList {
+            status,
+            persona_id,
+            after,
+            limit,
+        } => github::list(tx, *status, persona_id.as_deref(), *after, *limit),
+        Operation::GithubIdentityHistory {
+            identity_id,
+            after,
+            limit,
+        } => github::history(tx, identity_id, *after, *limit),
     }
 }
 
@@ -884,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_three_upgrade_preserves_tasks_and_adds_personas() {
+    fn schema_three_upgrade_preserves_tasks_and_adds_personas_and_github_identities() {
         let (dir, _lock, connection) = legacy_database();
         connection
             .execute_batch(include_str!("../migrations/002_continuity.sql"))
@@ -897,8 +916,10 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 4);
+        assert_eq!(health["schema_version"], 5);
         assert_eq!(health["personas_supported"], true);
+        assert_eq!(health["github_identity_records_supported"], true);
+        assert_eq!(health["github_credential_storage"], false);
         let task = store
             .execute(&request(Operation::TaskGet {
                 task_id: "task".into(),
@@ -935,5 +956,42 @@ mod tests {
             )))
             .unwrap();
         assert_eq!(created["revision"], 1);
+    }
+
+    #[test]
+    fn schema_four_upgrade_preserves_personas_and_adds_github_identities() {
+        let (dir, _lock, connection) = legacy_database();
+        connection
+            .execute_batch(include_str!("../migrations/002_continuity.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/003_tasks.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/004_personas.sql"))
+            .unwrap();
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',1)",[]).unwrap();
+        connection.execute("INSERT INTO personas(id,name,role,description,responsibilities,prohibitions,capabilities,review_required,max_concurrency,status,revision) VALUES('persona','reviewer','review_engineer','Reviews changes','[]','[]','[\"github.read\"]',1,1,'active',1)",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            store.execute(&request(Operation::Health)).unwrap()["schema_version"],
+            5
+        );
+        let persona = store
+            .execute(&request(Operation::PersonaGet {
+                persona_id: "persona".into(),
+            }))
+            .unwrap();
+        assert_eq!(persona["name"], "reviewer");
+        let identities = store
+            .execute(&request(Operation::GithubIdentitiesList {
+                status: None,
+                persona_id: None,
+                after: 0,
+                limit: 20,
+            }))
+            .unwrap();
+        assert_eq!(identities["items"], json!([]));
     }
 }

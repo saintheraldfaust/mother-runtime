@@ -55,6 +55,9 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_persona_update` | `idempotency_key`, nested `PersonaUpdate` | Replacement revision; stale expected revisions conflict. |
 | `mother_persona_set_status` | `idempotency_key`, nested `PersonaStatusChange` | Disabled/active/archived revision. |
 | `mother_persona_history` | `persona_id`; optional `after`, `limit` | Immutable persona revision pages. |
+| `mother_github_identities_list` | Optional `status`, `persona_id`, `after`, `limit` | Verified read-only GitHub identity records; no credentials. |
+| `mother_github_identity_get` | `identity_id` | One identity, persona binding, verification limits and revocation state. |
+| `mother_github_identity_history` | `identity_id`; optional `after`, `limit` | Immutable identity authorization revisions. |
 | `mother_activity_get` | Optional `project_id`, `after`, `limit` | `items`, `next_cursor`, project `revision` when scoped. |
 
 Pagination defaults to `after=0`, `limit=20`, with `1..=100` records per page. Pass
@@ -83,6 +86,7 @@ always query the service. No bridge cache can hide CLI changes.
 - `mother://tasks/{task_id}`: live host-tracked task and latest checkpoint.
 - `mother://handoffs/{handoff_id}`: immutable package plus live revision and claim.
 - `mother://personas/{persona_id}`: current persona revision and capabilities.
+- `mother://github-identities/{identity_id}`: verified identity metadata and limits.
 - `mother://projects/{project_id}`: project identity with current revision.
 - `mother://projects/{project_id}/context`: first 20 context records with current
   revision and `next_cursor`; use `mother_context_get` for remaining pages.
@@ -93,6 +97,11 @@ each time; URI stability does not imply immutable contents. Subscriptions and
 change notifications are not advertised. Refresh explicitly before further work. A persona assertion on a protected task
 operation is checked against the current runtime revision, so a client remembering
 an older persona gets a conflict rather than silently applying old policy.
+
+GitHub identity tools are read-only. Identity verification and revocation are
+CLI-only owner actions. MCP never receives tokens, credential values, profile paths
+or arbitrary GitHub operation access. A verified record is not a sandbox and does
+not make task operations require a persona.
 
 ## Transport and failure behavior
 

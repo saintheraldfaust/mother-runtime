@@ -71,8 +71,9 @@ checkpoint; a focused task is preserved separately as `current_task`.
 Snapshots are bounded to 192 KiB of compact JSON. When necessary, oldest selected
 context records, then decisions, then other tasks are dropped until the budget
 fits. The focused task is retained; `omitted_tasks` counts excluded other tasks. Omission counts include both earlier records and byte-budget exclusions.
-Use normal paginated reads for history. Persona, authorization-policy and verified
-repository-base scopes remain explicitly unavailable. These are continuation
+Use normal paginated reads for history. Persona, authorization-policy, verified
+GitHub identity and repository-base scopes remain explicitly unavailable inside
+snapshots; identity metadata can be read separately. These are continuation
 snapshots, not complete worker execution snapshots. Historical package bytes and
 snapshot versions remain unchanged; omitting a task ID also preserves legacy
 mutation serialization for retry-key comparisons.
@@ -120,7 +121,8 @@ metadata only, keeping bulk package reads explicit.
 
 Process integration tests recover this state across distinct MCP clients and real
 runtime restarts. Interactive Codex/Claude/Copilot sessions are not yet certified.
-Task records/checkpoints and bounded file evidence are implemented. Persona and
-policy revisions, independent execution, verified test/review/approval evidence,
-full execution snapshots, exports, retention, and backup remain unfinished. Mother does not transfer proprietary conversations or hidden
+Task records/checkpoints and bounded file evidence are implemented. Persona,
+policy and read-only GitHub identity revisions are stored, but independent
+execution, verified test/review/approval evidence, full execution snapshots,
+exports, retention, and backup remain unfinished. Mother does not transfer proprietary conversations or hidden
 model reasoning.
