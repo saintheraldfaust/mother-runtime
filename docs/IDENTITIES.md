@@ -67,9 +67,10 @@ motherctl --data-dir /path/to/state github revoke \
 Revocation blocks future authorized use and records an immutable revision. It does
 not delete history, delete the isolated `gh` profile, or rewrite any GitHub data.
 To remove local credentials as well, the owner must run `gh auth logout` with that
-profile's `GH_CONFIG_DIR`. No supervised worker process exists yet to pause or cancel. Re-running `github connect` with the
-same verified account after owner reauthorization creates a later active revision;
-past revisions remain readable.
+profile's `GH_CONFIG_DIR`. No provider worker process or credential handoff exists
+yet to pause or cancel. Re-running `github connect` with the same verified account
+after owner reauthorization creates a later active revision; past revisions remain
+readable.
 
 ## MCP exposure
 

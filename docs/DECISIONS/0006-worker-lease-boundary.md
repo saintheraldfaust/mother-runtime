@@ -56,3 +56,7 @@ task transitions, and it cannot detect work after a lease expires. The mock
 runner only proves scheduling, checkpointing and recovery mechanics. A future
 adapter must add process lifecycle, isolated worktrees, budget enforcement,
 evidence reconciliation and independent review as separate verified boundaries.
+
+ADR 0007 later added an owner-run supervisor and checkout-isolated worktree for
+one deterministic mock helper. That does not turn a lease into a sandbox or add
+provider, budget, test or review capabilities.

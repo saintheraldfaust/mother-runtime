@@ -1342,6 +1342,188 @@ async fn persona_live_policy_scenario() {
     service.stop();
 }
 
+fn git_repository(path: &Path) {
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["init"]);
+    run(&["config", "user.email", "test@example.invalid"]);
+    run(&["config", "user.name", "Test"]);
+    std::fs::write(path.join("tracked.txt"), b"base\n").unwrap();
+    run(&["add", "tracked.txt"]);
+    run(&["commit", "-m", "base"]);
+}
+
+#[tokio::test]
+async fn supervised_mock_process_uses_a_worktree_without_touching_the_project() {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        use serde_json::json;
+        let temp = directory();
+        let dir = temp.path().join("data");
+        success(&dir, &["init"]);
+        let mut runtime = Runtime::start(&dir);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_repository(&repo);
+        let project = success(
+            &dir,
+            &[
+                "projects",
+                "attach",
+                "--name",
+                "Process workers",
+                "--repository",
+                repo.to_str().unwrap(),
+            ],
+        );
+        let project_id = project["result"]["id"].as_str().unwrap();
+        let contract = json!({"project_id":project_id,"title":"Supervised work","objective":"Exercise process supervision","source":"test",
+            "acceptance_criteria":[{"path":"worker-output.txt"}]});
+        let file = temp.path().join("process-task.json");
+        std::fs::write(&file, serde_json::to_vec(&contract).unwrap()).unwrap();
+        let task = success(&dir, &["tasks", "create", "--file", file.to_str().unwrap()]);
+        let task_id = task["result"]["id"].as_str().unwrap();
+        let mut revision = 1;
+        for state in ["triaged", "ready"] {
+            let revision_arg = revision.to_string();
+            let step = success(
+                &dir,
+                &[
+                    "tasks",
+                    "transition",
+                    "--task",
+                    task_id,
+                    "--state",
+                    state,
+                    "--source",
+                    "test",
+                    "--reason",
+                    "prepare",
+                    "--expected-task-revision",
+                    &revision_arg,
+                ],
+            );
+            revision = step["result"]["task_revision"].as_u64().unwrap();
+        }
+        let run = success(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                task_id,
+                "--worker-label",
+                "process-a",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+                "--helper-delay-ms",
+                "600",
+            ],
+        );
+        let execution = &run["result"];
+        let execution_id = execution["id"].as_str().unwrap();
+        assert_eq!(execution["status"], "released");
+        assert_eq!(execution["process"]["status"], "exited");
+        assert_eq!(execution["process"]["evidence"][0]["status"], "present");
+        assert_eq!(execution["task_state"], "awaiting_input");
+        assert_eq!(execution["repository_mutation"], false);
+        assert_eq!(execution["worktree_mutation"], true);
+        assert_eq!(execution["result"]["completion"], false);
+        let worktree = PathBuf::from(execution["workspace"]["path"].as_str().unwrap());
+        assert_eq!(
+            std::fs::read(worktree.join("worker-output.txt")).unwrap(),
+            format!("mock worker execution {execution_id}\n").as_bytes()
+        );
+        assert!(!repo.join("worker-output.txt").exists());
+        let task = success(&dir, &["tasks", "inspect", "--task", task_id]);
+        assert_eq!(task["result"]["state"], "awaiting_input");
+        assert_eq!(task["result"]["completion_evidence"], Value::Null);
+        let log = execution["process"]["log_path"].as_str().unwrap();
+        assert!(std::fs::read_to_string(log).unwrap().contains("worker-output.txt"));
+
+        let cleaned = success(&dir, &["workers", "cleanup", "--execution", execution_id]);
+        assert_eq!(cleaned["result"]["workspace"]["status"], "removed");
+        assert!(!worktree.exists());
+        let worktrees = Command::new("git")
+            .current_dir(&repo)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(worktrees.status.success());
+        assert!(
+            !String::from_utf8_lossy(&worktrees.stdout).contains(worktree.to_str().unwrap())
+        );
+
+        let second = success(&dir, &["tasks", "create", "--file", file.to_str().unwrap()]);
+        let second_id = second["result"]["id"].as_str().unwrap();
+        let mut second_revision = 1;
+        for state in ["triaged", "ready"] {
+            let revision_arg = second_revision.to_string();
+            let step = success(
+                &dir,
+                &[
+                    "tasks",
+                    "transition",
+                    "--task",
+                    second_id,
+                    "--state",
+                    state,
+                    "--source",
+                    "test",
+                    "--reason",
+                    "prepare",
+                    "--expected-task-revision",
+                    &revision_arg,
+                ],
+            );
+            second_revision = step["result"]["task_revision"].as_u64().unwrap();
+        }
+        let failed = success(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                second_id,
+                "--worker-label",
+                "process-b",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+                "--helper-delay-ms",
+                "100",
+                "--helper-exit-code",
+                "2",
+            ],
+        );
+        assert_eq!(failed["result"]["status"], "failed");
+        assert_eq!(failed["result"]["process"]["status"], "failed");
+        assert_eq!(failed["result"]["task_state"], "failed");
+        assert_eq!(failed["result"]["result"]["completion"], false);
+        let second_execution = failed["result"]["id"].as_str().unwrap();
+        success(&dir, &["workers", "cleanup", "--execution", second_execution]);
+        runtime.stop();
+    })
+    .await
+    .expect("supervised process scenario timed out");
+}
+
 #[tokio::test]
 async fn worker_leases_schedule_checkpoint_and_recover_across_restart() {
     tokio::time::timeout(Duration::from_secs(45), worker_lease_scenario())

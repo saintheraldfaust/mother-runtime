@@ -8,12 +8,13 @@ Runtime lock files, configuration, and databases reject symlinks, insecure file
 modes, other owners, and hard links. Parent directories must also be trusted.
 
 The IPC surface contains project/context/decision/handoff/task operations, worker
-execution leases, persona and read-only GitHub identity records, health, and event
-retrieval. File observations can read only task contract paths under a registered repository, subject to the
-verifier limits. There is no general shell execution, credential broker, GitHub
-mutation, or worker startup. Local IPC can manage persona and identity authorization
-records under the same OS-user trust boundary. The owner-run CLI alone may invoke one
-fixed `gh api user` identity-verification command.
+execution leases/workspaces/processes, persona and read-only GitHub identity records,
+health, and event retrieval. File observations can read only task contract paths
+under a registered repository, subject to the verifier limits. There is no general
+shell execution, credential broker, GitHub mutation, or arbitrary worker startup.
+Local IPC can manage persona and identity authorization records under the same
+OS-user trust boundary. The owner-run CLI alone may invoke one fixed `gh api user`
+identity-verification command and supervise the fixed deterministic mock helper.
 
 All local clients currently have operator-level access to all registered projects.
 Do not expose the socket through network forwarding or give untrusted processes
@@ -32,29 +33,47 @@ client model.
 MCP mutations append context/decisions, explicitly supersede decisions, create
 continuation packages, claim a handoff, mutate host-tracked task records, or manage
 persona revisions. MCP cannot create, verify or revoke GitHub identities and cannot
-acquire, heartbeat, run, release or recover worker leases.
-Checkpoints and local completion perform bounded file observations. None grants
-independent execution authority. Tool annotations describe
-behavior and are not an authorization boundary. Persona-attributed task operations
-receive current-policy checks in the runtime; other surfaces still need them.
+acquire, heartbeat, mock-run, superintend, clean up, release or recover worker
+executions. Checkpoints and local completion perform bounded file observations.
+None grants independent execution authority. Tool annotations describe behavior and
+are not an authorization boundary. Persona-attributed task operations receive
+current-policy checks in the runtime; other surfaces still need them.
 
-### Worker lease boundary
+### Worker lease and process boundary
 
-Worker executions are coordination records, not a sandbox or process supervisor.
-A lease prevents a second lease on the same task inside Mother's single-writer
-database and bounds concurrent unexpired leases. It does not lock the repository,
-stop task transitions, prove that work occurred or detect edits after expiry. Any
-same-UID process can edit files or send IPC with local-operator authority.
+Worker executions are coordination records. A lease prevents a second lease on the
+same task inside Mother's single-writer database and bounds concurrent unexpired
+leases. It does not lock the repository, stop task transitions, prove that work
+occurred or detect edits after expiry. Any same-UID process can edit files or send
+IPC with local-operator authority.
 
-The `mock` adapter only transitions an assigned task to `running` and writes the
-same checkpoint the checkpoint operation would write. It executes no command,
-reads only the task contract files, writes no repository content, runs no tests,
-and cannot complete a task. `release` updates only execution metadata. Expiry
-recovery returns assigned/running tasks to `ready`; other states require operator
-reconciliation. Mutating worker operations are CLI-only, while MCP exposes reads.
+The `mock` checkpoint adapter only transitions an assigned task to `running` and
+writes the same checkpoint the checkpoint operation would write. It executes no
+command, reads only the task contract files, writes no repository content, runs no
+tests, and cannot complete a task. `release` updates only execution metadata.
 
-A future worker process needs separate worktree, process, credential, budget and
-reconciliation controls before it can be described as isolated execution.
+`workers run` is an owner-run supervisor, not a runtime service or sandbox. It
+verifies that the task can be leased, resolves the registered repository's current
+commit, and creates a detached Git worktree inside the private worker directory.
+Git commands disable hooks and fsmonitor and set `GIT_TERMINAL_PROMPT=0` with a
+failing askpass. The fixed helper runs in its own process group with a cleared
+environment, a worktree `HOME`, and inherited OS-user authority. It can write only
+the deterministic `worker-output.txt` by design, but this is not enforced filesystem
+isolation: a same-UID process could access other files. The worktree prevents
+concurrent-checkout collisions, not hostile access.
+
+The supervisor captures at most 64 KiB of stdout and stderr into a 0600 log, attaches
+the PID, heartbeats the lease, sends SIGTERM/SIGKILL to the process group on timeout,
+and records bounded observations of declared acceptance criteria. Successful exit
+moves a running task to `awaiting_input`; failure or timeout moves it to `failed`.
+No path completes a task. Worktrees are retained; `workers cleanup` removes only an
+inactive execution's worktree and prunes Git metadata. If a lease expires while a
+process may still run, recovery marks the task `blocked` instead of requeueing it.
+
+Expiry recovery may still miscategorize late work, and process PIDs are not
+authenticated worker identity. Mutating worker operations are CLI-only, while MCP
+exposes reads. Provider credentials, budgets, sandbox isolation, test execution,
+automatic retry, and independent evidence reconciliation remain unimplemented.
 
 ### GitHub identity boundary
 
@@ -125,11 +144,11 @@ a worker. Snapshot permissions are explicitly absent and cannot grant authority.
 
 Task owner labels are not persona/identity bindings. Persona IDs in transition
 records describe which runtime policy authorized the operation, not which human
-performed it. Completing a local task verifies
-its declared file contract only; free-form objectives and reported tests remain
-unverified. Review-required completion is blocked rather than accepting invented
-review/approval claims. Task state changes do not launch or terminate processes;
-the mock runner only records a checkpoint.
+performed it. Completing a local task verifies its declared file contract only;
+free-form objectives and reported tests remain unverified. Review-required
+completion is blocked rather than accepting invented review/approval claims. Task
+state changes do not launch or terminate processes; only the separate owner-run
+supervisor does, and the checkpoint mock runner only records a checkpoint.
 
 The file verifier anchors at the registered repository, rejects symlink traversal,
 hard links, and non-regular files, and limits read sizes. It exports hashes/sizes,

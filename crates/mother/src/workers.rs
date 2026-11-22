@@ -1,7 +1,8 @@
 //! Durable execution leases for deterministic external runners.
 //!
 //! A lease records coordination intent. It does not prove execution, grant
-//! identity, supervise a process, or authorize repository writes.
+//! identity or authorize repository writes. The runtime does not supervise
+//! processes; an owner-run CLI supervisor records fixed mock-helper lifecycle.
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
@@ -108,4 +109,58 @@ pub struct WorkerReleaseInput {
     pub expected_revision: u64,
     pub outcome: WorkerReleaseOutcome,
     pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerWorkspaceInput {
+    pub execution_id: String,
+    pub expected_revision: u64,
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerWorkspaceCleanupInput {
+    pub execution_id: String,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerProcessAttachInput {
+    pub execution_id: String,
+    pub expected_revision: u64,
+    #[schemars(range(min = 1, max = 3600))]
+    pub lease_seconds: u32,
+    pub pid: u32,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerProcessOutcome {
+    Exited,
+    Failed,
+    Killed,
+}
+
+impl WorkerProcessOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exited => "exited",
+            Self::Failed => "failed",
+            Self::Killed => "killed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerProcessFinishInput {
+    pub execution_id: String,
+    pub expected_revision: u64,
+    pub outcome: WorkerProcessOutcome,
+    pub exit_code: Option<i32>,
 }

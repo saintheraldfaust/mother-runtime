@@ -408,17 +408,17 @@ fn tools() -> Vec<Tool> {
         ),
         tool::<WorkerExecutionsPage>(
             "mother_worker_executions_list",
-            "List durable worker execution leases, optionally filtered by task, project or status. Leases coordinate external runners; they do not prove execution, supervise processes or authorize writes.",
+            "List durable worker execution leases, optionally filtered by task, project or status. Process executions expose isolated-worktree and owner-run supervisor metadata; they do not prove correctness or authorize writes.",
             true,
         ),
         tool::<WorkerExecutionId>(
             "mother_worker_execution_get",
-            "Read one worker lease, its revision, expiry, task state and explicit coordination-only limits.",
+            "Read one worker lease, its workspace, process, bounded artifact evidence, revision, expiry, task state and explicit limits.",
             true,
         ),
         tool::<WorkerHistoryPage>(
             "mother_worker_execution_history",
-            "Read immutable worker lease, heartbeat, mock-checkpoint, release and expiry events.",
+            "Read immutable worker lease, heartbeat, mock-checkpoint, workspace, process, release and expiry events.",
             true,
         ),
     ]
@@ -488,7 +488,7 @@ impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("mother",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed. Worker execution leases coordinate external runners but do not supervise processes, prove execution, complete tasks or authorize repository writes. This build supports no GitHub writes.")
+            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed. Worker execution leases coordinate owner-run runners. The deterministic mock process runs in an isolated worktree and records bounded evidence, but worktrees are not sandboxes and the runtime does not launch processes. No operation authorizes project-repository writes, completion or GitHub writes.")
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

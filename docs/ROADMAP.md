@@ -11,7 +11,7 @@ local project/context workflow, with verified restart and multiple-process acces
 | 4: continuity | Tasks, checkpoints, decisions and handoffs verified | Persona/policy/Git scopes in execution snapshots; verified tests/reviews/approvals. |
 | 5: personas | Registry, revisions, status and asserted capability gates verified | Mandatory-persona client model, notification/refresh certification, worker handoff. |
 | 6: GitHub accounts | Read-only profile verification, identity records and revocation verified with a fake `gh` | Real-account certification, repository/action scopes, credential broker, write authentication, Git push isolation. |
-| 7–9: execution/workflow | Dependency-aware leases, bounded scheduling and mock checkpoints verified | Supervised provider adapter, isolated worktrees, authorized GitHub workflow. |
+| 7–9: execution/workflow | Dependency-aware leases, bounded scheduling, supervised mock processes and isolated worktrees verified | Provider adapter, budgets, tests/evidence reconciliation, authorized GitHub workflow. |
 | 10–12: TUI/hardening/release | Pending | Ratatui, cross-provider validation, packaging, release readiness. |
 
 MCP evidence: two independent rmcp clients launch separate bridge processes, use
@@ -50,18 +50,22 @@ Worker scheduling evidence: ready tasks with completed dependencies are listed;
 one lease is enforced per task and a global active limit rejects excess grants;
 heartbeats extend expiry and reject stale revisions; the mock adapter writes a
 checkpoint while leaving files unchanged and refusing completion; expired leases
-recover after an actual runtime kill/restart; CLI and MCP reads agree. This is not
-a supervised worker, worktree sandbox, test runner or evidence reconciliation.
+recover after an actual runtime kill/restart; CLI and MCP reads agree. The separate
+`workers run` supervisor creates a detached worktree, runs the deterministic helper
+in its own process group, records bounded artifact evidence, maps exit status to a
+task transition, and retains the worktree for explicit cleanup. CLI and MCP reads
+expose workspace/process metadata. This is not a sandbox, provider call, test runner
+or independent review.
 
-Next vertical slice: a supervised worker-process adapter that runs in an isolated
-Git worktree, reports bounded heartbeats, and reconciles repository evidence before
-any task transition. Keep GitHub writes, credential brokering and independent
-review gates separate until their authorization and reconciliation boundaries are
-verified. Real-host cross-assistant certification remains required before claiming
-cross-provider continuity.
+Next vertical slice: a provider adapter under the same owner-run supervisor and
+worktree boundary, with explicit budgets, cancellation and reconciliation of
+provider-reported artifacts before any task transition. Keep GitHub writes,
+credential brokering and independent review gates separate until their authorization
+and reconciliation boundaries are verified. Real-host cross-assistant certification
+remains required before claiming cross-provider continuity.
 
 Before optional features, complete competitive analysis as required by the directive.
 Performance targets remain targets until representative benchmarks are recorded.
 Backups/restores, retention, export, encryption/redaction, installers, launchd,
-remote transports, supervised workers, worktrees, and credential handling are not
-part of this slice.
+remote transports, provider workers, sandbox isolation, and credential handling are
+not part of this slice.

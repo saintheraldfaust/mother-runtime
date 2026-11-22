@@ -8,7 +8,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The suite contains 31 unit tests and eleven process integration tests.
+The suite contains 34 unit tests and twelve process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -32,13 +32,19 @@ Unit coverage:
 - GitHub identity records require an active `github.read` persona, reject duplicate
   active bindings, and preserve immutable authorization/revocation revisions.
   Schema 4→5 upgrade preserves personas and adds identity tables. Schema 5→6
-  preserves identities and adds worker lease tables.
+  preserves identities and adds worker lease tables. Schema 6→7 preserves leases
+  and adds workspace/process tables.
 - Worker eligibility excludes tasks with incomplete dependencies or an unexpired
   lease. One active lease per task and the global `max_active` bound are enforced.
 - Heartbeats extend leases and reject stale revisions. Expired leases are recovered
   explicitly and during reacquisition, with attempt increments and history retained.
 - The mock adapter writes an ordinary checkpoint, leaves repository files unchanged,
   cannot complete a task, and is rejected after expiry or a stale revision.
+- A process execution requires a ready workspace and owner-matched revision; its
+  finish records bounded acceptance-criterion evidence under the worktree and never
+  writes project completion evidence.
+- Lease recovery blocks a running supervised task instead of requeueing it, while
+  allowing the process finish to preserve expired status and evidence.
 
 Process integration coverage:
 
@@ -51,6 +57,10 @@ Process integration coverage:
 - Reject a second service and offline init while the writer lock is held.
 - Reject malformed, oversized, and unsupported-version requests; subsequent
   health requests still work. Verify socket permissions and graceful SIGTERM cleanup.
+- A supervised deterministic mock process leases a task, creates a detached Git
+  worktree, writes only its fixed artifact there, records log/process evidence, and
+  transitions the task to `awaiting_input` without touching the project checkout or
+  completing the task.
 - Refuse to replace a regular file at the socket path and refuse insecure
   directory permissions. `doctor` reports missing state without initializing it.
 
@@ -122,9 +132,11 @@ Persona process coverage:
   Immutable persona history retains both revisions.
 
 Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
-macOS and Linux validation; no hosted CI run is claimed. No interactive coding-assistant host, coding
-provider, mandatory-persona authorization, real GitHub account login, GitHub write,
-credential broker, remote workflow, supervised-worker process, worktree isolation,
-test execution, performance target, power-loss, or hostile same-UID isolation test
-has been performed. GitHub identity
-coverage uses a fake `gh`; it is not certification with a real account.
+macOS and Linux validation; no hosted CI run is claimed. No interactive
+coding-assistant host, coding provider, mandatory-persona authorization, real GitHub
+account login, GitHub write, credential broker, remote workflow, provider worker,
+sandbox isolation, worker-executed tests, performance target, power-loss, or hostile
+same-UID isolation test has been performed. Supervisor-crash orphan reaping is not
+implemented. The supervised process test uses a deterministic local helper, not a
+model provider. GitHub identity coverage uses a
+fake `gh`; it is not certification with a real account.

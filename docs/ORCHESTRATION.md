@@ -1,12 +1,13 @@
 # Host-tracked tasks and checkpoints
 
 Mother persists task contracts, dependency IDs, state transitions, checkpoints,
-narrowly scoped file evidence, and durable worker execution leases. A task without
-a lease reports `execution_mode: host_tracked` and null `worker_execution`; a leased
-task reports `worker_leased` plus its active execution. A `running` record still
-describes reported work, not proof that Mother launched or supervised a process.
-The only adapter is a deterministic mock that writes a checkpoint and never edits
-a repository or completes a task.
+narrowly scoped file evidence, durable worker execution leases, and owner-run
+supervised mock processes. A task without a lease reports `execution_mode:
+host_tracked` and null `worker_execution`; a leased task reports `worker_leased`
+plus its active execution. A `running` record still describes reported work, not
+proof of correctness or independent review. The only process adapter is a
+deterministic mock helper in an isolated worktree; it never edits the project
+repository or completes a task.
 
 ## Contracts and revisions
 
@@ -160,7 +161,7 @@ Snapshots also select up to 20 other unfinished tasks by latest project mutation
 with omission counts and the existing snapshot byte budget. Old packages remain
 unchanged even after a task completes; query live task state when continuing.
 
-## Worker execution leases
+## Worker execution leases and supervised mock runs
 
 A lease is durable coordination metadata, not a process or permission. It records
 an execution ID, task/project, worker label, attempt, lease duration, expiry,
@@ -171,7 +172,7 @@ checks dependencies, task state and bounds transactionally.
 Only a `ready` task can be leased. Acquisition transitions it to `assigned`, sets
 the worker label as owner, and creates a `leased` execution. The worker label is
 self-reported coordination data, not a persona or verified identity. Start the
-mock adapter, extend the lease, or release it explicitly:
+mock checkpoint adapter, extend the lease, or release it explicitly:
 
 ```sh
 motherctl workers eligible --project PROJECT_ID
@@ -191,28 +192,70 @@ revision and extend expiry from the current time. A stale, released or expired
 execution cannot heartbeat. Execution statuses are `leased`, `running`, `released`,
 `failed`, `expired`, and `completed`; only the first two are active.
 
-The mock adapter requires an assigned/running task, transitions an assigned task to
-`running`, writes a normal checkpoint with source `mock-worker`, and extends the
-lease. It performs no repository reads beyond the ordinary checkpoint contract,
-no writes, no test execution, and no completion. Its response explicitly reports
-`repository_mutation: false` and `completion: false`.
+The checkpoint-only `mock` operation requires an assigned/running task, transitions
+an assigned task to `running`, writes a normal checkpoint with source `mock-worker`,
+and extends the lease. It performs no repository reads beyond the ordinary checkpoint
+contract, no writes, no test execution, and no completion. Its response explicitly
+reports `repository_mutation: false` and `completion: false`.
+
+### Owner-run supervised process
+
+`workers run` is a separate CLI supervisor for one fixed deterministic helper. It
+leases a ready task, resolves the registered repository's current Git commit, creates
+a detached worktree under `data/workers/<execution_id>/worktree`, records the base
+commit, launches `motherctl __mock-worker`, attaches its PID, heartbeats while it is
+alive, writes a bounded `worker.log`, and finalizes process evidence. The hidden
+helper is not a general command surface.
+
+```sh
+motherctl workers run --task TASK_ID --worker-label mock-a \
+  --lease-seconds 120 --max-active 2 --timeout-seconds 60
+motherctl workers inspect --execution EXECUTION_ID
+motherctl workers cleanup --execution EXECUTION_ID
+```
+
+The helper starts in its own process group with a cleared environment, a worktree
+`HOME`, Git terminal prompts disabled, and Git hooks/fsmonitor disabled for worktree
+operations. It checks that the supervisor is alive, optionally sleeps, and on success
+writes only `worker-output.txt` (0600) with `mock worker execution <execution_id>`.
+Standard output and error are captured up to 64 KiB each in `worker.log` (0600).
+Process records expose PID, status, exit code, log path, timestamps, and bounded
+acceptance-criterion observations from the worktree. They do not prove correctness,
+tests, independent review, or completion.
+
+A successful helper exit transitions a `running` task to `awaiting_input`; a failed
+or killed helper transitions it to `failed`. Neither path completes the task. If the
+lease expires while a process may still be running, recovery changes the task to
+`blocked` instead of requeueing it. Explicit release is rejected while a supervised
+process is running. The worktree is retained for inspection; `workers cleanup` only
+removes an inactive execution's worktree, prunes Git metadata, and marks the workspace
+removed. Cleanup does not delete the execution record, log, or evidence.
 
 Expiry recovery is explicit (`workers recover`) or occurs when reacquiring the same
 task. An expired execution is marked `expired`. An `assigned` task returns to
-`ready`; a `running` task returns through `awaiting_input` to `ready`; other task
-states are left for operator reconciliation. Recovery preserves history and sets
-a new attempt on the next lease. Leases persist across runtime restarts.
+`ready`; a `running` task without a running process returns through `awaiting_input`
+to `ready`; a running process blocks automatic requeue; other task states are left
+for operator reconciliation. Recovery preserves history and sets a new attempt on
+the next lease. Leases persist across runtime restarts.
 
-A lease is not an OS lock, sandbox, process supervisor, identity assertion, or
-write authorization. A same-UID process can still edit files or submit task
-transitions, and Mother cannot detect work performed after expiry. Read worker
-state through MCP; lease, heartbeat, mock-run, release and recovery mutations are
-CLI-only. See [ADR 0006](DECISIONS/0006-worker-lease-boundary.md).
+A lease is not an OS lock, sandbox, process supervisor, identity assertion, or write
+authorization. The owner-run CLI supervises the fixed mock helper; the runtime itself
+does not launch, signal or inspect arbitrary processes. A Git worktree prevents
+checkout collisions, not filesystem access: a same-UID process can still edit files
+outside it or submit task transitions, and Mother cannot detect work performed after
+expiry. Read worker state through MCP; lease, heartbeat, mock-run, process supervision,
+cleanup, release and recovery mutations are CLI-only. If the supervisor itself is
+killed, the helper observes parent loss and exits, but no online reaper currently
+finalizes the process row; recovery can block the task, while cleanup and a later
+process finish require manual reconciliation. See
+[ADR 0006](DECISIONS/0006-worker-lease-boundary.md) and
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md).
 
 ## Remaining execution work
 
-A real supervised worker, provider adapter, isolated worktree, automatic retry,
-credential broker, test runner, review verifier, and human-approval workflow remain
-unimplemented. The mock adapter proves scheduling, checkpointing, bounded
-concurrency, lease recovery, and restart persistence only. GitHub writes and
-credential brokering remain separate boundaries.
+A provider-backed worker, sandbox, automatic retry, budget enforcement, credential
+broker, test runner, review verifier, and human-approval workflow remain
+unimplemented. The deterministic mock process proves scheduling, checkpointing,
+bounded concurrency, lease recovery, restart persistence, owner-run process
+supervision, worktree checkout isolation, bounded logs/evidence, and explicit
+cleanup only. GitHub writes and credential brokering remain separate boundaries.

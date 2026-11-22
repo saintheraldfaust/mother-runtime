@@ -4,7 +4,8 @@ use crate::personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaU
 use crate::tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition};
 use crate::workers::{
     WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
-    WorkerReleaseInput,
+    WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerReleaseInput,
+    WorkerWorkspaceCleanupInput, WorkerWorkspaceInput,
 };
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -160,6 +161,10 @@ pub enum Operation {
     WorkerHeartbeat(WorkerHeartbeatInput),
     WorkerMockRun(WorkerMockInput),
     WorkerRelease(WorkerReleaseInput),
+    WorkerWorkspaceStart(WorkerWorkspaceInput),
+    WorkerProcessAttach(WorkerProcessAttachInput),
+    WorkerProcessFinish(WorkerProcessFinishInput),
+    WorkerWorkspaceCleanup(WorkerWorkspaceCleanupInput),
     WorkerRecover,
 }
 
@@ -184,6 +189,10 @@ impl Operation {
                 | Self::WorkerHeartbeat(_)
                 | Self::WorkerMockRun(_)
                 | Self::WorkerRelease(_)
+                | Self::WorkerWorkspaceStart(_)
+                | Self::WorkerProcessAttach(_)
+                | Self::WorkerProcessFinish(_)
+                | Self::WorkerWorkspaceCleanup(_)
                 | Self::WorkerRecover
         )
     }

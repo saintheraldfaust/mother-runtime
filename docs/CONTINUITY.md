@@ -106,7 +106,8 @@ even with the same recipient label.
 
 Recipient labels are routing metadata. They do not authenticate a human, provider,
 or persona: all clients still operate under the same local OS-user trust boundary.
-There is no claim release/reassignment or execution lease yet; create a fresh
+There is no claim release/reassignment; a claim itself grants no lease. Task
+execution leases are separate and do not transfer handoff ownership. Create a fresh
 handoff for a new continuation. A snapshot cannot override future permissions.
 
 ## Retrieval and remaining work

@@ -194,6 +194,7 @@ fn snapshot(
         &scoped(Operation::ProjectGet {
             project_id: project.into(),
         }),
+        None,
     )?;
     let context = apply(
         tx,
@@ -202,6 +203,7 @@ fn snapshot(
             after: context_after as u64,
             limit: 20,
         }),
+        None,
     )?;
     // Snapshot selection must not use a byte-paginated prefix that could omit newest decisions.
     let ids=tx.prepare("SELECT id FROM decisions WHERE project_id=?1 AND status='active' ORDER BY sequence DESC LIMIT 20")?.query_map([project],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;

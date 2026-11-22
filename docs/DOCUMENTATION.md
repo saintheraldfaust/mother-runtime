@@ -19,6 +19,7 @@ external-source content, not automatically by its filename.
 | [DECISIONS/0004-persona-policy.md](DECISIONS/0004-persona-policy.md) | Public — Public persona/revision/capability architecture and remaining limits. |
 | [DECISIONS/0005-github-identity-boundary.md](DECISIONS/0005-github-identity-boundary.md) | Public — Public read-only identity verification boundary and limits. |
 | [DECISIONS/0006-worker-lease-boundary.md](DECISIONS/0006-worker-lease-boundary.md) | Public — Public worker lease, mock checkpoint and recovery boundary; no operational data. |
+| [DECISIONS/0007-worker-process-boundary.md](DECISIONS/0007-worker-process-boundary.md) | Public — Public owner-run process supervision, worktree retention and evidence boundary; no operational data. |
 | [DOCUMENTATION.md](DOCUMENTATION.md) | Public — Public classification inventory and contributor guidance. |
 | [IDENTITIES.md](IDENTITIES.md) | Public — Public read-only identity setup, stored metadata, revocation and limits. |
 | [LICENSING.md](LICENSING.md) | Public — Public license provenance and third-party notice obligations. |

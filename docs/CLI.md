@@ -37,8 +37,10 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `workers lease --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease; no process is launched. |
 | `workers heartbeat --execution ID --expected-revision N [--lease-seconds N]` | Extend an active lease from the current time. |
 | `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
-| `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state. |
-| `workers recover` | Expire overdue leases and requeue assigned/running tasks. |
+| `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state; a running supervised process blocks release. |
+| `workers run --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, run the deterministic mock helper under supervision, and finalize evidence. |
+| `workers cleanup --execution ID` | Remove a retained non-active worktree, prune Git metadata, and mark the workspace removed. |
+| `workers recover` | Expire overdue leases; a task with a running supervised process becomes blocked instead of requeued. |
 | `history [--project ID] [--after N] [--limit N]` | Retrieve committed events, optionally project-scoped. |
 | `personas create --file FILE` | Create a revisioned persona definition from bounded JSON. |
 | `personas list [--status STATUS] [--project ID] [--after N] [--limit N]` | Page through personas, optionally filtered by status or project scope. |
@@ -60,8 +62,10 @@ IPC-backed commands return `{version, request_id, result}` or
 `{version, request_id, error: {code, message}}`. Expected domain errors have codes
 `invalid_request`, `not_found`, `conflict`, or `integrity_error`; unexpected storage failures return
 `internal_error` without request contents. Pre-IPC failures return `command_failed`.
-`init` and `doctor` return command-specific diagnostic objects. Clap syntax errors
-use its standard stderr output and exit status 2. All operational failures exit 1.
+`init` and `doctor` return command-specific diagnostic objects. `workers run` and
+`workers cleanup` are owner-run composites and emit only `{result}`. Clap syntax
+errors use its standard stderr output and exit status 2. All operational failures
+exit 1.
 
 `doctor` exits 1 if the service is stopped, even if offline checks pass. It does
 not fix permissions or create a missing database. `init` refuses to run against
@@ -98,7 +102,10 @@ private profile directory; the account owner completes `gh auth login` with
 `GH_CONFIG_DIR` set to it; `github connect` verifies the account and records the
 identity. No token is stored or returned. See [GitHub identities](IDENTITIES.md).
 
-Worker leases default to 120 seconds and four active leases. They coordinate
-external runners inside Mother's database only; they are not OS locks, process
-supervision, identity proof or write authorization. The mock adapter no-ops beyond
-a normal checkpoint. See [worker leases](ORCHESTRATION.md#worker-execution-leases).
+Worker leases default to 120 seconds and four active leases. Leases coordinate
+owner-run runners inside Mother's database; they are not OS locks, identity proof or
+write authorization. `workers run` is a separate owner-run supervisor for a fixed
+deterministic helper in an isolated Git worktree; it is not a sandbox or provider
+adapter. `workers mock` records a checkpoint without launching a process. Retained
+worktrees require explicit `workers cleanup`. See
+[worker operations](ORCHESTRATION.md#worker-execution-leases).

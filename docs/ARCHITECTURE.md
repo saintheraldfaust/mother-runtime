@@ -10,7 +10,7 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `tasks`: typed host-tracked task contracts and explicit state graph.
 - `personas`: typed persona definitions, statuses, capabilities and authorization claims.
 - `github`: typed read-only GitHub identity records and the fixed `gh api user` verifier.
-- `workers`: typed execution-lease inputs, statuses, outcomes and mock-checkpoint limits.
+- `workers`: typed execution-lease, workspace and process inputs, statuses, outcomes and limits.
 - `evidence`: bounded descriptor-relative repository file observations.
 - `store/tasks`: task/dependency persistence, immutable checkpoints/transitions,
   optimistic revisions, and local file-contract completion gates.
@@ -21,7 +21,8 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `store/github`: verified GitHub identity records, persona bindings, immutable
   revision history, revocation and paginated read-only metadata.
 - `store/workers`: transactional dependency-aware lease acquisition, bounded
-  concurrency, heartbeats, expiry recovery, release and mock checkpoints.
+  concurrency, heartbeats, expiry recovery, release, mock checkpoints, workspace
+  registration, process attachment/finish and bounded artifact evidence.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
 - `main`: Clap command grammar and JSON presentation.
@@ -45,6 +46,8 @@ indexed project/sequence queries. No network listener or general shell executor 
 The owner-run CLI may invoke one fixed read-only `gh api user` verification command;
 the runtime itself does not execute GitHub commands. Worker lease operations are
 SQLite coordination: the runtime does not launch, supervise or signal processes.
+The separate owner-run `workers run` command creates a detached Git worktree and
+supervises one fixed deterministic mock helper in its own process group.
 
 Each socket connection carries one newline-terminated request and response.
 Requests are limited to 64 KiB and responses to 4 MiB, with five-second read/write
@@ -82,14 +85,16 @@ Schema 3 adds host-tracked tasks. Schema 4 adds versioned personas, immutable
 persona revision snapshots/audit rows and optional persona attribution on task
 transitions/checkpoints. Schema 5 adds read-only verified GitHub identity records,
 persona bindings, revocation and immutable identity revisions/events. Schema 6 adds
-worker execution leases and immutable lease events. File observation runs on the runtime
-blocking threads within a state transaction, without invoking any shell or provider.
-Filesystem observations are not transactional with SQLite; they are point-in-time
-evidence with size/path restrictions. Completion rechecks the latest validating
-checkpoint. See [ADR 0003](DECISIONS/0003-host-tracked-tasks.md) and
-[ADR 0004](DECISIONS/0004-persona-policy.md) and
-[ADR 0005](DECISIONS/0005-github-identity-boundary.md) and
-[ADR 0006](DECISIONS/0006-worker-lease-boundary.md).
+worker execution leases and immutable lease events. Schema 7 adds worker workspaces
+and supervised process records. File observation runs on the runtime blocking threads
+within a state transaction, without invoking any shell or provider. Filesystem
+observations are not transactional with SQLite; they are point-in-time evidence with
+size/path restrictions. Completion rechecks the latest validating checkpoint. See
+[ADR 0003](DECISIONS/0003-host-tracked-tasks.md),
+[ADR 0004](DECISIONS/0004-persona-policy.md),
+[ADR 0005](DECISIONS/0005-github-identity-boundary.md),
+[ADR 0006](DECISIONS/0006-worker-lease-boundary.md) and
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md).
 
 Lists cap both item count and approximately 1 MiB of serialized item data. Cursors
 advance only to the final returned item, so byte-limited pages do not lose records.

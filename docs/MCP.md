@@ -59,9 +59,9 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_github_identity_get` | `identity_id` | One identity, persona binding, verification limits and revocation state. |
 | `mother_github_identity_history` | `identity_id`; optional `after`, `limit` | Immutable identity authorization revisions. |
 | `mother_worker_eligible_tasks` | Optional `project_id`, `limit` | Bounded ready tasks with completed dependencies and no unexpired lease. |
-| `mother_worker_executions_list` | Optional `task_id`, `project_id`, `status`, `after`, `limit` | Worker leases with expiry, revision and coordination-only limits. |
-| `mother_worker_execution_get` | `execution_id` | One lease, task state, revision, expiry and result. |
-| `mother_worker_execution_history` | `execution_id`; optional `after`, `limit` | Immutable lease, heartbeat, mock-checkpoint, release and expiry events. |
+| `mother_worker_executions_list` | Optional `task_id`, `project_id`, `status`, `after`, `limit` | Worker leases with workspace, process, expiry, revision and explicit limits. |
+| `mother_worker_execution_get` | `execution_id` | One lease, workspace, process, bounded evidence, task state, revision and result. |
+| `mother_worker_execution_history` | `execution_id`; optional `after`, `limit` | Immutable lease, heartbeat, mock-checkpoint, workspace, process, release and expiry events. |
 | `mother_activity_get` | Optional `project_id`, `after`, `limit` | `items`, `next_cursor`, project `revision` when scoped. |
 
 Pagination defaults to `after=0`, `limit=20`, with `1..=100` records per page. Pass
@@ -108,11 +108,13 @@ CLI-only owner actions. MCP never receives tokens, credential values, profile pa
 or arbitrary GitHub operation access. A verified record is not a sandbox and does
 not make task operations require a persona.
 
-Worker tools are read-only. Lease acquisition, heartbeat, mock execution, release
-and recovery are CLI-only. A lease coordinates an external runner inside Mother's
-database; it does not launch, supervise or stop a process, prove execution, grant
-identity, authorize repository writes or complete a task. The mock adapter writes
-only an ordinary checkpoint.
+Worker tools are read-only. Lease acquisition, heartbeat, mock execution, process
+supervision, release and recovery are CLI-only. `workers run` is an owner-run
+supervisor: it creates an isolated Git worktree, starts a deterministic helper,
+heartbeats the lease, records bounded artifact evidence, and retains the worktree
+for inspection. The runtime itself never launches a process. A lease does not grant
+identity, authorize project-repository writes or complete a task; a worktree prevents
+checkout collisions but is not a sandbox.
 
 ## Transport and failure behavior
 

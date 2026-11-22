@@ -40,6 +40,7 @@ The current implementation includes:
 - Durable host-tracked tasks and checkpoints.
 - Dependency-aware worker execution leases with heartbeat, bounded concurrency and crash recovery.
 - A deterministic mock worker adapter that records checkpoints without editing files or auto-completing work.
+- Owner-run supervised mock processes with isolated Git worktrees, bounded logs and artifact evidence.
 - Runtime file evidence.
 - Revision checks and idempotent writes.
 - Runtime diagnostics.
@@ -61,7 +62,7 @@ Mother's next engineering milestones include:
 
 **GitHub identities:** Expand read-only verified account records into repository/action scopes, a credential broker, write authorization, and reconciliation without exposing tokens to agents.
 
-**Independent workers:** Expand the verified lease scheduler and mock adapter into supervised provider workers with isolated worktrees, budgets, and evidence reconciliation.
+**Independent workers:** Expand the verified lease scheduler, mock process supervisor and worktree boundary into provider adapters with budgets, tests and evidence reconciliation.
 
 **Governed engineering workflows:** Assignment, implementation, validation, independent review, and human-controlled merging through GitHub.
 
@@ -81,7 +82,7 @@ Mother's next engineering milestones include:
 
 Mother Runtime is under active development and is not yet a production-ready autonomous engineering orchestrator.
 
-The current foundation should not be interpreted as proof that supervised independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available.
+The current foundation should not be interpreted as proof that provider-backed independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available.
 
 See the development status, architecture, security documentation, and roadmap for verified capabilities and ongoing work.
 

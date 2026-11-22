@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 mod continuity;
 mod github;
 mod personas;
@@ -16,6 +16,7 @@ mod tasks;
 mod workers;
 
 pub struct Store {
+    dir: std::path::PathBuf,
     connection: Connection,
 }
 
@@ -55,9 +56,16 @@ impl Store {
             if version < 6 {
                 transaction.execute_batch(include_str!("../migrations/006_worker_leases.sql"))?;
             }
+            if version < 7 {
+                transaction
+                    .execute_batch(include_str!("../migrations/007_worker_processes.sql"))?;
+            }
             transaction.commit()?;
         }
-        Ok(Self { connection })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            connection,
+        })
     }
 
     pub fn execute(&mut self, request: &Request) -> Result<Value> {
@@ -84,7 +92,7 @@ impl Store {
                 return Ok(serde_json::from_str(&response)?);
             }
         }
-        let result = apply(&transaction, request)?;
+        let result = apply(&transaction, request, Some(&self.dir))?;
         if request.operation.mutates() {
             transaction.execute(
                 "INSERT INTO idempotency VALUES (?1, ?2, ?3)",
@@ -107,6 +115,10 @@ fn text(value: &str, name: &str, max: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn worker_dir(dir: Option<&Path>) -> Result<&Path> {
+    dir.ok_or_else(|| Error::Unavailable("worker operation requires runtime context".into()))
 }
 
 fn pagination(after: u64, limit: u32) -> Result<()> {
@@ -163,13 +175,13 @@ fn page(mut items: Vec<Value>, limit: u32) -> Value {
     json!({"items": items, "next_cursor": next})
 }
 
-fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
+fn apply(tx: &Transaction<'_>, request: &Request, dir: Option<&Path>) -> Result<Value> {
     match &request.operation {
         Operation::Health => {
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"deterministic_mock_checkpoint_only", "worker_process_supervision":false, "worker_repository_mutation":false, "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"deterministic_mock_process", "worker_process_supervision":true, "worker_supervision_scope":"owner_run_cli", "worker_worktree_isolation":true, "worker_project_repository_mutation":false, "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -393,6 +405,18 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
         Operation::WorkerHeartbeat(input) => workers::heartbeat(tx, request, input),
         Operation::WorkerMockRun(input) => workers::run_mock(tx, request, input),
         Operation::WorkerRelease(input) => workers::release(tx, request, input),
+        Operation::WorkerWorkspaceStart(input) => {
+            workers::workspace_start(tx, worker_dir(dir)?, request, input)
+        }
+        Operation::WorkerProcessAttach(input) => {
+            workers::process_attach(tx, worker_dir(dir)?, request, input)
+        }
+        Operation::WorkerProcessFinish(input) => {
+            workers::process_finish(tx, worker_dir(dir)?, request, input)
+        }
+        Operation::WorkerWorkspaceCleanup(input) => {
+            workers::workspace_cleanup(tx, worker_dir(dir)?, request, input)
+        }
         Operation::WorkerRecover => workers::recover(tx, request),
     }
 }
@@ -948,7 +972,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 6);
+        assert_eq!(health["schema_version"], 7);
         assert_eq!(health["execution_leases_supported"], true);
         assert_eq!(health["personas_supported"], true);
         assert_eq!(health["github_identity_records_supported"], true);
@@ -1009,7 +1033,7 @@ mod tests {
         let mut store = Store::open(dir.path()).unwrap();
         assert_eq!(
             store.execute(&request(Operation::Health)).unwrap()["schema_version"],
-            6
+            7
         );
         let persona = store
             .execute(&request(Operation::PersonaGet {
@@ -1029,6 +1053,36 @@ mod tests {
     }
 
     #[test]
+    fn schema_six_upgrade_preserves_worker_leases_and_adds_process_tables() {
+        let (dir, _lock, connection) = legacy_database();
+        for migration in [
+            include_str!("../migrations/002_continuity.sql"),
+            include_str!("../migrations/003_tasks.sql"),
+            include_str!("../migrations/004_personas.sql"),
+            include_str!("../migrations/005_github_identities.sql"),
+            include_str!("../migrations/006_worker_leases.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',3)",[]).unwrap();
+        connection.execute("INSERT INTO tasks(id,project_id,title,objective,source,acceptance_criteria,review_required,state,owner_label,revision,project_revision) VALUES('task','legacy','Leased task','Preserve lease','old-client','[{\"path\":\"artifact\"}]',0,'assigned','worker-a',1,3)",[]).unwrap();
+        connection.execute("INSERT INTO worker_executions(id,task_id,project_id,worker_label,adapter,status,revision,attempt,lease_seconds,lease_expires_at,heartbeat_at) VALUES('execution','task','legacy','worker-a','mock','leased',1,1,120,'2099-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        let health = store.execute(&request(Operation::Health)).unwrap();
+        assert_eq!(health["schema_version"], 7);
+        let execution = store
+            .execute(&request(Operation::WorkerExecutionGet {
+                execution_id: "execution".into(),
+            }))
+            .unwrap();
+        assert_eq!(execution["status"], "leased");
+        assert_eq!(execution["workspace"], Value::Null);
+        assert_eq!(execution["process"], Value::Null);
+        assert_eq!(execution["task_state"], "assigned");
+    }
+
+    #[test]
     fn schema_five_upgrade_preserves_identities_and_adds_worker_leases() {
         let (dir, _lock, connection) = legacy_database();
         for migration in [
@@ -1045,9 +1099,10 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 6);
+        assert_eq!(health["schema_version"], 7);
         assert_eq!(health["workers_supported"], true);
-        assert_eq!(health["worker_process_supervision"], false);
+        assert_eq!(health["worker_process_supervision"], true);
+        assert_eq!(health["worker_worktree_isolation"], true);
         assert_eq!(health["execution_leases_supported"], true);
         let identities = store
             .execute(&request(Operation::GithubIdentitiesList {

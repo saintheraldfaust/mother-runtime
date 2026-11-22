@@ -125,6 +125,21 @@ pub fn github_profile(dir: &Path, profile_id: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub fn worker_execution_dir(dir: &Path, execution_id: &str) -> Result<PathBuf> {
+    check_private_dir(dir)?;
+    let valid = uuid::Uuid::parse_str(execution_id).is_ok_and(|id| id.to_string() == execution_id);
+    if !valid {
+        return Err(Error::Invalid(
+            "execution_id must be a canonical lowercase UUID".into(),
+        ));
+    }
+    let root = dir.join("workers");
+    create_private_dir(&root)?;
+    let path = root.join(execution_id);
+    create_private_dir(&path)?;
+    Ok(path)
+}
+
 pub fn existing_github_profile(dir: &Path, profile_id: &str) -> Result<PathBuf> {
     check_private_dir(dir)?;
     if !crate::github::valid_profile_id(profile_id) {

@@ -1,15 +1,15 @@
 format_version = 1
 updated_on = "2026-11-22"
 directive = "MOTHER.md"
-milestone = "Dependency-aware worker execution leases, bounded scheduling, deterministic mock checkpoints, and crash recovery"
-next_objective = "Add a supervised worker-process adapter with isolated Git worktrees, heartbeat enforcement and evidence reconciliation; keep GitHub writes and credential brokering separate"
+milestone = "Owner-run supervised deterministic mock processes with isolated Git worktrees, durable execution leases and bounded evidence"
+next_objective = "Add a provider-backed worker adapter under the owner-run supervisor with explicit budgets, cancellation and evidence reconciliation; keep GitHub writes and credential brokering separate"
 
 [implemented]
 cargo_workspace = true
 motherctl_cli = true
 strict_versioned_toml = true
 structured_errors_and_logging = true
-sqlite_migrations_v1_through_v6 = true
+sqlite_migrations_v1_through_v7 = true
 host_tracked_task_contracts = true
 explicit_task_state_machine = true
 immutable_task_checkpoints_and_transition_history = true
@@ -62,13 +62,18 @@ bounded_worker_concurrency = true
 worker_heartbeat_and_expiry_recovery = true
 deterministic_mock_worker_checkpoints = true
 worker_leases_survive_restart = true
+owner_run_supervised_mock_processes = true
+isolated_git_worktree_checkouts = true
+bounded_worker_process_logs = true
+worker_worktree_artifact_evidence = true
+explicit_worktree_cleanup = true
 worker_mcp_read_tools = true
 
 [verification]
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 31
-process_integration_tests = 11
+unit_tests = 34
+process_integration_tests = 12
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
@@ -112,6 +117,8 @@ coverage = [
   "Task-level and global worker lease bounds reject duplicate or excess acquisition",
   "Heartbeats extend expiry and stale worker revisions conflict",
   "Deterministic mock checkpoints leave files unchanged and cannot complete tasks",
+  "Running supervised processes block expiry requeue and retain expired evidence",
+  "Owner-run mock process isolates its checkout, writes one artifact, and never completes the task",
   "Expired leases recover assigned/running tasks and leases survive runtime restart",
   "MCP worker reads and the execution resource agree with CLI state",
 ]
@@ -137,17 +144,19 @@ verified = [
   "Persona registry, immutable revisions, status changes and asserted capability gates",
   "Read-only GitHub identity profile verification, records, persona binding and revocation",
   "Dependency-aware worker leases, bounded scheduling, heartbeats, mock checkpoints and crash recovery",
+  "Owner-run deterministic mock process supervision, isolated worktree checkout, bounded logs/evidence and explicit cleanup",
 ]
 incomplete = [
   "Handoff claims coordinate continuation but grant no execution ownership or lease",
   "Persona assertions are optional; same-UID clients may use the local-operator path",
   "Continuation snapshots omit persona, authorization and verified Git scopes",
-  "Worker leases coordinate external runners but do not supervise processes, isolate worktrees or reconcile evidence",
+  "The owner-run supervisor covers only a fixed deterministic mock helper; provider calls, budgets, tests, sandbox isolation and independent evidence reconciliation remain unavailable",
+  "A killed supervisor can leave a running process row requiring manual reconciliation; online orphan reaping is unavailable",
 ]
 not_implemented = [
   "Real-host Codex/Claude Code/Copilot certification",
   "Credential broker, real-account certification, repository/action scopes and GitHub writes",
-  "Supervised independent workers, provider adapters, worktree isolation and GitHub review lifecycle",
+  "Provider-backed workers, resource budgets, sandbox isolation and GitHub review lifecycle",
   "Ratatui interface and human approval records",
 ]
 
@@ -155,8 +164,8 @@ not_implemented = [
 phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
 phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona change notification/refresh certification", "Per-operation typed result schemas beyond the response envelope"]
 phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling", "Handoff execution ownership/leases separate from readable history"]
-phase_7_execution = ["Supervised worker process lifecycle", "Isolated Git worktrees and bounded resource budgets", "Provider adapters and evidence reconciliation", "Automatic retry and independent review gates"]
-later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Worktree isolation and identity-safe Git operations", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
+phase_7_execution = ["Provider-backed worker adapters and model budgets", "Sandbox isolation and cancellation across hosts", "Test execution and evidence reconciliation", "Automatic retry and independent review gates"]
+later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Identity-safe Git operations and credential brokering", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
 
 [limitations]
 trust_boundary = "Same OS user; all current clients have local operator authority"
@@ -164,8 +173,8 @@ context_trust = "Submitted summaries, objectives, labels, tests and references r
 task_completion = "Declared local file contract only; no test execution, independent review, human approval or general correctness verification"
 file_observations = "Point-in-time individual files, not an atomic filesystem snapshot or hostile same-UID sandbox"
 handoff_resume = "Local operator coordination claim only; no execution, authority grant, lease, or reassignment"
-worker_leases = "Coordination metadata only; not an OS lock, sandbox, process supervisor, identity proof or write authorization"
-worker_execution = "Deterministic mock checkpoint only; no repository mutation, test execution, completion or independent review"
+worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises one fixed mock helper"
+worker_execution = "Deterministic mock process in an isolated Git worktree; no provider call, test execution, project-repository mutation, completion, sandbox or independent review"
 snapshot_scopes = "Project, context, decisions, host-tracked tasks and latest checkpoints; persona/policy/verified Git scopes unavailable"
 secret_redaction = false
 encryption_at_rest = false
@@ -175,10 +184,13 @@ persona_registry_implemented = true
 persona_authorization_implemented = "optional_asserted_task_operations"
 mandatory_persona_authorization = false
 persona_identity_verified = false
-workers_implemented = false
-worker_process_supervision = false
-worktree_isolation = false
-worker_adapter = "deterministic_mock_checkpoint_only"
+workers_implemented = true
+worker_process_supervision = true
+worker_supervision_scope = "owner_run_cli"
+worktree_isolation = true
+worktree_isolation_scope = "checkout_only_not_sandbox"
+worker_adapter = "deterministic_mock_process_owner_run_cli"
+worker_project_repository_mutation = false
 scheduling_implemented = true
 leases_implemented = true
 worker_mcp_read_tools = true

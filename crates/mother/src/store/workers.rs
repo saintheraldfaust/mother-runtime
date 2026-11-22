@@ -5,14 +5,18 @@ use crate::{
     tasks::{CheckpointInput, TaskState, TaskTransition},
     workers::{
         WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
-        WorkerReleaseInput, WorkerReleaseOutcome,
+        WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
+        WorkerReleaseInput, WorkerReleaseOutcome, WorkerWorkspaceCleanupInput,
+        WorkerWorkspaceInput,
     },
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const EXECUTION_COLUMNS: &str = "e.sequence,e.id,e.task_id,e.project_id,e.worker_label,e.adapter,e.status,e.revision,e.attempt,e.lease_seconds,e.lease_expires_at,e.heartbeat_at,e.result,e.created_at,e.updated_at,t.state,t.revision,t.project_revision,t.owner_label,(e.status='expired' OR (e.status IN ('leased','running') AND e.lease_expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')))";
+const EXECUTION_COLUMNS: &str = "e.sequence,e.id,e.task_id,e.project_id,e.worker_label,e.adapter,e.status,e.revision,e.attempt,e.lease_seconds,e.lease_expires_at,e.heartbeat_at,e.result,e.created_at,e.updated_at,t.state,t.revision,t.project_revision,t.owner_label,(e.status='expired' OR (e.status IN ('leased','running') AND e.lease_expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))),w.path,w.base_commit,w.status,p.pid,p.status,p.exit_code,p.log_path,p.evidence,p.started_at,p.ended_at,p.updated_at";
+const EXECUTION_FROM: &str = "FROM worker_executions e JOIN tasks t ON t.id=e.task_id LEFT JOIN worker_workspaces w ON w.execution_id=e.id LEFT JOIN worker_processes p ON p.execution_id=e.id";
 
 fn parsed_json(raw: String) -> rusqlite::Result<Value> {
     serde_json::from_str(&raw).map_err(|e| {
@@ -22,7 +26,32 @@ fn parsed_json(raw: String) -> rusqlite::Result<Value> {
 
 fn execution_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let status = r.get::<_, String>(6)?;
-    let active = matches!(status.as_str(), "leased" | "running");
+    let expired = r.get::<_, bool>(19)?;
+    let active = matches!(status.as_str(), "leased" | "running") && !expired;
+    let workspace_path = r.get::<_, Option<String>>(20)?;
+    let workspace = match workspace_path {
+        Some(path) => json!({
+            "path":path,
+            "base_commit":r.get::<_,String>(21)?,
+            "status":r.get::<_,String>(22)?,
+        }),
+        None => Value::Null,
+    };
+    let pid = r.get::<_, Option<i64>>(23)?;
+    let process = match pid {
+        Some(pid) => json!({
+            "pid":pid,
+            "status":r.get::<_,String>(24)?,
+            "exit_code":r.get::<_,Option<i64>>(25)?,
+            "log_path":r.get::<_,String>(26)?,
+            "evidence":r.get::<_,Option<String>>(27)?.map(parsed_json).transpose()?,
+            "started_at":r.get::<_,String>(28)?,
+            "ended_at":r.get::<_,Option<String>>(29)?,
+            "updated_at":r.get::<_,String>(30)?,
+            "trust":"owner_run_cli_process_observation",
+        }),
+        None => Value::Null,
+    };
     Ok(json!({
         "sequence":r.get::<_,i64>(0)?,
         "id":r.get::<_,String>(1)?,
@@ -43,17 +72,20 @@ fn execution_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "task_revision":r.get::<_,i64>(16)?,
         "project_revision":r.get::<_,i64>(17)?,
         "task_owner_label":r.get::<_,Option<String>>(18)?,
-        "expired":r.get::<_,bool>(19)?,
-        "active":active && !r.get::<_,bool>(19)?,
+        "expired":expired,
+        "active":active,
         "lease_trust":"coordination_only",
-        "process_supervised":false,
-        "repository_mutation":false
+        "workspace":workspace,
+        "process":process,
+        "process_supervised":pid.is_some(),
+        "repository_mutation":false,
+        "worktree_mutation":pid.is_some()
     }))
 }
 
 fn execution(tx: &Transaction<'_>, id: &str) -> Result<Value> {
     tx.query_row(
-        &format!("SELECT {EXECUTION_COLUMNS} FROM worker_executions e JOIN tasks t ON t.id=e.task_id WHERE e.id=?1"),
+        &format!("SELECT {EXECUTION_COLUMNS} {EXECUTION_FROM} WHERE e.id=?1"),
         [id],
         execution_row,
     )
@@ -64,7 +96,7 @@ fn execution(tx: &Transaction<'_>, id: &str) -> Result<Value> {
 pub(super) fn for_task(tx: &Transaction<'_>, id: &str) -> Result<Option<Value>> {
     Ok(tx
         .query_row(
-            &format!("SELECT {EXECUTION_COLUMNS} FROM worker_executions e JOIN tasks t ON t.id=e.task_id WHERE e.task_id=?1 AND e.status IN ('leased','running') ORDER BY e.sequence DESC LIMIT 1"),
+            &format!("SELECT {EXECUTION_COLUMNS} {EXECUTION_FROM} WHERE e.task_id=?1 AND e.status IN ('leased','running') ORDER BY e.sequence DESC LIMIT 1"),
             [id],
             execution_row,
         )
@@ -96,6 +128,71 @@ fn validate_label(label: &str) -> Result<()> {
 
 fn validate_summary(summary: &str, name: &str) -> Result<()> {
     super::text(summary, name, 4096)
+}
+
+fn valid_commit(commit: &str) -> bool {
+    matches!(commit.len(), 40 | 64)
+        && commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn worker_root(dir: &Path, execution_id: &str) -> Result<PathBuf> {
+    let valid = Uuid::parse_str(execution_id).is_ok_and(|id| id.to_string() == execution_id);
+    if !valid {
+        return Err(Error::Invalid(
+            "execution_id must be a canonical lowercase UUID".into(),
+        ));
+    }
+    let dir = dir.canonicalize()?;
+    let root = dir.join("workers").join(execution_id);
+    crate::config::check_private_dir(&root)?;
+    Ok(root)
+}
+
+fn worktree_path(dir: &Path, execution_id: &str) -> Result<PathBuf> {
+    let root = worker_root(dir, execution_id)?;
+    let path = root.join("worktree");
+    let metadata = std::fs::symlink_metadata(&path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error::Invalid(
+            "worker worktree must be a real directory".into(),
+        ));
+    }
+    let canonical = path.canonicalize()?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err(Error::Invalid(
+            "worker worktree escapes the execution directory".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn process_status(tx: &Transaction<'_>, execution_id: &str) -> Result<Option<String>> {
+    Ok(tx
+        .query_row(
+            "SELECT status FROM worker_processes WHERE execution_id=?1",
+            [execution_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+fn require_process_owner(value: &Value) -> Result<()> {
+    if value["task_owner_label"].as_str() != value["worker_label"].as_str() {
+        return Err(Error::Conflict(
+            "task owner no longer matches the worker lease".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn extend_lease(tx: &Transaction<'_>, execution_id: &str, seconds: u32) -> Result<()> {
+    tx.execute(
+        "UPDATE worker_executions SET lease_seconds=?1,lease_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?2),heartbeat_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?3",
+        params![seconds, expire_modifier(seconds), execution_id],
+    )?;
+    Ok(())
 }
 
 fn record_event(
@@ -150,9 +247,31 @@ fn expire_internal(tx: &Transaction<'_>, request: &Request, id: &str) -> Result<
             id
         ],
     )?;
+    let process = process_status(tx, id)?;
     let mut task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
     let mut requeued = false;
-    if task["state"] == "assigned" {
+    let mut blocked = false;
+    if process.as_deref() == Some("running") {
+        if matches!(task["state"].as_str(), Some("assigned" | "running")) {
+            task = tasks::transition(
+                tx,
+                request,
+                &TaskTransition {
+                    task_id: task["id"].as_str().unwrap().into(),
+                    state: TaskState::Blocked,
+                    source: "worker-recovery".into(),
+                    reason:
+                        "worker lease expired while the supervised process may still be running"
+                            .into(),
+                    owner_label: None,
+                    persona: None,
+                    expected_task_revision: task["task_revision"].as_u64().unwrap(),
+                    expected_project_revision: None,
+                },
+            )?;
+            blocked = true;
+        }
+    } else if task["state"] == "assigned" {
         task = tasks::transition(
             tx,
             request,
@@ -205,7 +324,7 @@ fn expire_internal(tx: &Transaction<'_>, request: &Request, id: &str) -> Result<
         request,
         &current,
         "worker.expired",
-        json!({"reason":"lease_expired","task_requeued":requeued,"task_state":task["state"]}),
+        json!({"reason":"lease_expired","task_requeued":requeued,"task_blocked":blocked,"task_state":task["state"]}),
     )?;
     Ok(current)
 }
@@ -352,6 +471,11 @@ pub(super) fn run_mock(
             "worker lease expired; recover it before running".into(),
         ));
     }
+    if !value["process"].is_null() {
+        return Err(Error::Conflict(
+            "worker execution is supervised by a process; use process operations".into(),
+        ));
+    }
     let current = value["revision"].as_u64().unwrap();
     if input.expected_revision != current {
         return Err(Error::Conflict(format!(
@@ -455,6 +579,11 @@ pub(super) fn release(
             "worker lease expired; recover it instead of releasing".into(),
         ));
     }
+    if value["process"]["status"] == "running" {
+        return Err(Error::Conflict(
+            "supervised worker process is still running".into(),
+        ));
+    }
     let current = value["revision"].as_u64().unwrap();
     if input.expected_revision != current {
         return Err(Error::Conflict(format!(
@@ -500,6 +629,311 @@ pub(super) fn recover(tx: &Transaction<'_>, request: &Request) -> Result<Value> 
         "recovery":"task_requeued_when_assigned_or_running",
         "repository_mutation":false
     }))
+}
+
+pub(super) fn workspace_start(
+    tx: &Transaction<'_>,
+    dir: &Path,
+    request: &Request,
+    input: &WorkerWorkspaceInput,
+) -> Result<Value> {
+    if !valid_commit(&input.base_commit) {
+        return Err(Error::Invalid(
+            "base_commit must be a lowercase 40- or 64-character Git object ID".into(),
+        ));
+    }
+    let value = execution(tx, &input.execution_id)?;
+    if value["revision"].as_u64() != Some(input.expected_revision) {
+        return Err(Error::Conflict(format!(
+            "stale worker revision; current revision is {}",
+            value["revision"]
+        )));
+    }
+    if !value["active"].as_bool().unwrap_or(false) {
+        return Err(Error::Conflict(
+            "worker execution is not active or its lease expired".into(),
+        ));
+    }
+    if !value["workspace"].is_null() {
+        return Err(Error::Conflict(
+            "worker execution already has a workspace".into(),
+        ));
+    }
+    if !value["process"].is_null() {
+        return Err(Error::Conflict(
+            "worker execution already has a process".into(),
+        ));
+    }
+    require_process_owner(&value)?;
+    let path = worktree_path(dir, &input.execution_id)?;
+    let path = path
+        .to_str()
+        .ok_or_else(|| Error::Invalid("worker worktree path must be UTF-8".into()))?;
+    tx.execute(
+        "INSERT INTO worker_workspaces(id,execution_id,path,base_commit,status) VALUES(?1,?2,?3,?4,'ready')",
+        params![
+            Uuid::new_v4().to_string(),
+            input.execution_id,
+            path,
+            input.base_commit
+        ],
+    )?;
+    let seconds = value["lease_seconds"].as_u64().unwrap() as u32;
+    extend_lease(tx, &input.execution_id, seconds)?;
+    tx.execute(
+        "UPDATE worker_executions SET revision=revision+1 WHERE id=?1",
+        [&input.execution_id],
+    )?;
+    let value = execution(tx, &input.execution_id)?;
+    record_event(
+        tx,
+        request,
+        &value,
+        "worker.workspace_prepared",
+        json!({"base_commit":input.base_commit,"path":path,"repository_mutation":false}),
+    )?;
+    execution(tx, &input.execution_id)
+}
+
+pub(super) fn process_attach(
+    tx: &Transaction<'_>,
+    dir: &Path,
+    request: &Request,
+    input: &WorkerProcessAttachInput,
+) -> Result<Value> {
+    validate_seconds(input.lease_seconds)?;
+    if input.pid <= 1 {
+        return Err(Error::Invalid("pid must be greater than 1".into()));
+    }
+    let value = execution(tx, &input.execution_id)?;
+    if value["revision"].as_u64() != Some(input.expected_revision) {
+        return Err(Error::Conflict(format!(
+            "stale worker revision; current revision is {}",
+            value["revision"]
+        )));
+    }
+    if !value["active"].as_bool().unwrap_or(false) {
+        return Err(Error::Conflict(
+            "worker execution is not active or its lease expired".into(),
+        ));
+    }
+    if value["workspace"]["status"] != "ready" {
+        return Err(Error::Conflict(
+            "worker process requires a ready workspace".into(),
+        ));
+    }
+    if !value["process"].is_null() {
+        return Err(Error::Conflict(
+            "worker execution already has a process".into(),
+        ));
+    }
+    if value["task_state"] != "assigned" {
+        return Err(Error::Conflict(
+            "worker process requires an assigned task".into(),
+        ));
+    }
+    require_process_owner(&value)?;
+    let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
+    tasks::transition(
+        tx,
+        request,
+        &TaskTransition {
+            task_id: task["id"].as_str().unwrap().into(),
+            state: TaskState::Running,
+            source: "mock-process".into(),
+            reason: "owner-run supervisor attached a deterministic mock process".into(),
+            owner_label: None,
+            persona: None,
+            expected_task_revision: task["task_revision"].as_u64().unwrap(),
+            expected_project_revision: None,
+        },
+    )?;
+    let root = worker_root(dir, &input.execution_id)?;
+    let log_path = root.join("worker.log");
+    let log_path = log_path
+        .to_str()
+        .ok_or_else(|| Error::Invalid("worker log path must be UTF-8".into()))?;
+    tx.execute(
+        "INSERT INTO worker_processes(id,execution_id,pid,status,log_path) VALUES(?1,?2,?3,'running',?4)",
+        params![
+            Uuid::new_v4().to_string(),
+            input.execution_id,
+            input.pid,
+            log_path
+        ],
+    )?;
+    tx.execute(
+        "UPDATE worker_executions SET status='running',revision=revision+1 WHERE id=?1",
+        [&input.execution_id],
+    )?;
+    extend_lease(tx, &input.execution_id, input.lease_seconds)?;
+    let value = execution(tx, &input.execution_id)?;
+    record_event(
+        tx,
+        request,
+        &value,
+        "worker.process_attached",
+        json!({"pid":input.pid,"log_path":log_path,"process_supervised":"owner_run_cli"}),
+    )?;
+    execution(tx, &input.execution_id)
+}
+
+pub(super) fn process_finish(
+    tx: &Transaction<'_>,
+    dir: &Path,
+    request: &Request,
+    input: &WorkerProcessFinishInput,
+) -> Result<Value> {
+    let value = execution(tx, &input.execution_id)?;
+    if value["revision"].as_u64() != Some(input.expected_revision) {
+        return Err(Error::Conflict(format!(
+            "stale worker revision; current revision is {}",
+            value["revision"]
+        )));
+    }
+    if value["process"]["status"] != "running" {
+        return Err(Error::Conflict(
+            "worker process is not running or was already finalized".into(),
+        ));
+    }
+    if value["workspace"]["status"] != "ready" {
+        return Err(Error::Conflict(
+            "worker process requires a ready workspace".into(),
+        ));
+    }
+    let stored = Path::new(value["workspace"]["path"].as_str().unwrap());
+    let current = worktree_path(dir, &input.execution_id)?;
+    if stored != current {
+        return Err(Error::Conflict(
+            "worker workspace no longer matches the recorded path".into(),
+        ));
+    }
+    let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
+    let criteria: Vec<crate::tasks::ArtifactCriterion> =
+        serde_json::from_value(task["acceptance_criteria"].clone())?;
+    let evidence = crate::evidence::observe(&current, &criteria);
+    let succeeded =
+        input.outcome == WorkerProcessOutcome::Exited && input.exit_code.unwrap_or(0) == 0;
+    if value["task_state"] == "running" {
+        let (state, reason) = if succeeded {
+            (
+                TaskState::AwaitingInput,
+                "mock process exited successfully; host review is required before validation",
+            )
+        } else {
+            (
+                TaskState::Failed,
+                "mock process did not exit successfully; triage before retry",
+            )
+        };
+        tasks::transition(
+            tx,
+            request,
+            &TaskTransition {
+                task_id: task["id"].as_str().unwrap().into(),
+                state,
+                source: "mock-process".into(),
+                reason: reason.into(),
+                owner_label: None,
+                persona: None,
+                expected_task_revision: task["task_revision"].as_u64().unwrap(),
+                expected_project_revision: None,
+            },
+        )?;
+    }
+    tx.execute(
+        "UPDATE worker_processes SET status=?1,exit_code=?2,evidence=?3,ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE execution_id=?4",
+        params![
+            input.outcome.as_str(),
+            input.exit_code.map(i64::from),
+            serde_json::to_string(&evidence)?,
+            input.execution_id
+        ],
+    )?;
+    let result = json!({
+        "outcome":input.outcome.as_str(),
+        "exit_code":input.exit_code,
+        "evidence":evidence,
+        "repository_mutation":false,
+        "worktree_mutation":true,
+        "completion":false
+    });
+    let next_status = if value["expired"] == true {
+        "expired"
+    } else if succeeded {
+        "released"
+    } else {
+        "failed"
+    };
+    tx.execute(
+        "UPDATE worker_executions SET status=?1,revision=revision+1,result=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?3",
+        params![
+            next_status,
+            serde_json::to_string(&result)?,
+            input.execution_id
+        ],
+    )?;
+    let value = execution(tx, &input.execution_id)?;
+    record_event(
+        tx,
+        request,
+        &value,
+        "worker.process_finished",
+        json!({"outcome":input.outcome.as_str(),"exit_code":input.exit_code,"evidence":evidence,"repository_mutation":false,"completion":false}),
+    )?;
+    execution(tx, &input.execution_id)
+}
+
+pub(super) fn workspace_cleanup(
+    tx: &Transaction<'_>,
+    dir: &Path,
+    request: &Request,
+    input: &WorkerWorkspaceCleanupInput,
+) -> Result<Value> {
+    let value = execution(tx, &input.execution_id)?;
+    if value["revision"].as_u64() != Some(input.expected_revision) {
+        return Err(Error::Conflict(format!(
+            "stale worker revision; current revision is {}",
+            value["revision"]
+        )));
+    }
+    if value["active"].as_bool() == Some(true) || value["process"]["status"] == "running" {
+        return Err(Error::Conflict(
+            "cannot clean up an active worker execution or running process".into(),
+        ));
+    }
+    if value["workspace"]["status"] != "ready" {
+        return Err(Error::Conflict(
+            "worker workspace is not ready or was already cleaned up".into(),
+        ));
+    }
+    let root = worker_root(dir, &input.execution_id)?;
+    match std::fs::symlink_metadata(root.join("worktree")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(Error::Conflict(
+                "remove the Git worktree before marking the workspace cleaned up".into(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    tx.execute(
+        "UPDATE worker_workspaces SET status='removed',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE execution_id=?1",
+        [&input.execution_id],
+    )?;
+    tx.execute(
+        "UPDATE worker_executions SET revision=revision+1 WHERE id=?1",
+        [&input.execution_id],
+    )?;
+    let value = execution(tx, &input.execution_id)?;
+    record_event(
+        tx,
+        request,
+        &value,
+        "worker.workspace_removed",
+        json!({"repository_mutation":false}),
+    )?;
+    execution(tx, &input.execution_id)
 }
 
 pub(super) fn eligible(tx: &Transaction<'_>, project: Option<&str>, limit: u32) -> Result<Value> {
@@ -559,7 +993,7 @@ pub(super) fn list(
 ) -> Result<Value> {
     pagination(after, limit)?;
     let mut stmt = tx.prepare(&format!(
-        "SELECT {EXECUTION_COLUMNS} FROM worker_executions e JOIN tasks t ON t.id=e.task_id
+        "SELECT {EXECUTION_COLUMNS} {EXECUTION_FROM}
          WHERE (?1 IS NULL OR e.task_id=?1) AND (?2 IS NULL OR e.project_id=?2)
            AND (?3 IS NULL OR e.status=?3) AND e.sequence>?4
          ORDER BY e.sequence LIMIT ?5"
@@ -908,6 +1342,172 @@ mod tests {
             .unwrap();
         assert_eq!(released["status"], "failed");
         assert_eq!(released["result"]["outcome"], "failed");
+    }
+
+    #[test]
+    fn supervised_process_uses_private_worktree_and_never_completes_the_task() {
+        let (dir, _lock, mut store, project) = fixture();
+        let mut input = task_input(&project, "Process work");
+        input.acceptance_criteria = vec![ArtifactCriterion {
+            path: "worker-output.txt".into(),
+            expected_sha256: None,
+        }];
+        let task = store
+            .execute(&request(Operation::TaskCreate(input)))
+            .unwrap();
+        let task = store
+            .execute(&request(Operation::TaskTransition(transition(
+                &task,
+                TaskState::Triaged,
+            ))))
+            .unwrap();
+        let task = store
+            .execute(&request(Operation::TaskTransition(transition(
+                &task,
+                TaskState::Ready,
+            ))))
+            .unwrap();
+        let leased = store
+            .execute(&request(Operation::WorkerLease(lease(
+                &task,
+                "process-a",
+                30,
+                2,
+            ))))
+            .unwrap();
+        let execution_id = leased["id"].as_str().unwrap().to_owned();
+        let root = crate::config::worker_execution_dir(dir.path(), &execution_id).unwrap();
+        let worktree = root.join("worktree");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::write(worktree.join("worker-output.txt"), b"mock output").unwrap();
+        let workspace = store
+            .execute(&request(Operation::WorkerWorkspaceStart(
+                WorkerWorkspaceInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 1,
+                    base_commit: "a".repeat(40),
+                },
+            )))
+            .unwrap();
+        assert_eq!(workspace["workspace"]["status"], "ready");
+        assert_eq!(workspace["workspace"]["base_commit"], "a".repeat(40));
+        let attached = store
+            .execute(&request(Operation::WorkerProcessAttach(
+                WorkerProcessAttachInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 2,
+                    lease_seconds: 30,
+                    pid: std::process::id(),
+                },
+            )))
+            .unwrap();
+        assert_eq!(attached["status"], "running");
+        assert_eq!(attached["process"]["status"], "running");
+        assert_eq!(attached["task_state"], "running");
+        assert_eq!(attached["repository_mutation"], false);
+        let finished = store
+            .execute(&request(Operation::WorkerProcessFinish(
+                WorkerProcessFinishInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 3,
+                    outcome: WorkerProcessOutcome::Exited,
+                    exit_code: Some(0),
+                },
+            )))
+            .unwrap();
+        assert_eq!(finished["status"], "released");
+        assert_eq!(finished["process"]["status"], "exited");
+        assert_eq!(finished["process"]["evidence"][0]["status"], "present");
+        assert_eq!(finished["task_state"], "awaiting_input");
+        assert_eq!(finished["result"]["completion"], false);
+        assert!(finished["result"].get("completion_evidence").is_none());
+        let task = store
+            .execute(&request(Operation::TaskGet {
+                task_id: task["id"].as_str().unwrap().into(),
+            }))
+            .unwrap();
+        assert_eq!(task["state"], "awaiting_input");
+        assert_eq!(task["completion_evidence"], Value::Null);
+        std::fs::remove_dir_all(&worktree).unwrap();
+        let cleaned = store
+            .execute(&request(Operation::WorkerWorkspaceCleanup(
+                WorkerWorkspaceCleanupInput {
+                    execution_id,
+                    expected_revision: 4,
+                },
+            )))
+            .unwrap();
+        assert_eq!(cleaned["workspace"]["status"], "removed");
+    }
+
+    #[test]
+    fn expiry_blocks_tasks_when_the_supervised_process_may_still_run() {
+        let (dir, _lock, mut store, project) = fixture();
+        let task = ready(&mut store, &project, "Running process expiry");
+        let leased = store
+            .execute(&request(Operation::WorkerLease(lease(
+                &task,
+                "process-a",
+                1,
+                2,
+            ))))
+            .unwrap();
+        let execution_id = leased["id"].as_str().unwrap().to_owned();
+        let root = crate::config::worker_execution_dir(dir.path(), &execution_id).unwrap();
+        std::fs::create_dir(root.join("worktree")).unwrap();
+        store
+            .execute(&request(Operation::WorkerWorkspaceStart(
+                WorkerWorkspaceInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 1,
+                    base_commit: "b".repeat(40),
+                },
+            )))
+            .unwrap();
+        store
+            .execute(&request(Operation::WorkerProcessAttach(
+                WorkerProcessAttachInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 2,
+                    lease_seconds: 1,
+                    pid: std::process::id(),
+                },
+            )))
+            .unwrap();
+        thread::sleep(Duration::from_millis(1200));
+        let recovered = store.execute(&request(Operation::WorkerRecover)).unwrap();
+        assert_eq!(recovered["count"], 1);
+        assert_eq!(recovered["expired"][0]["process"]["status"], "running");
+        let task = store
+            .execute(&request(Operation::TaskGet {
+                task_id: task["id"].as_str().unwrap().into(),
+            }))
+            .unwrap();
+        assert_eq!(task["state"], "blocked");
+        assert!(
+            task["latest_transition"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("supervised process")
+        );
+        let finished = store
+            .execute(&request(Operation::WorkerProcessFinish(
+                WorkerProcessFinishInput {
+                    execution_id: execution_id.clone(),
+                    expected_revision: 4,
+                    outcome: WorkerProcessOutcome::Killed,
+                    exit_code: None,
+                },
+            )))
+            .unwrap();
+        assert_eq!(finished["status"], "expired");
+        assert_eq!(finished["process"]["status"], "killed");
+        let task = store
+            .execute(&request(Operation::TaskGet {
+                task_id: task["id"].as_str().unwrap().into(),
+            }))
+            .unwrap();
+        assert_eq!(task["state"], "blocked");
     }
 
     #[test]
