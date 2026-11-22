@@ -10,6 +10,10 @@ use mother_runtime::{
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request},
     runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
+    workers::{
+        WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
+        WorkerReleaseInput, WorkerReleaseOutcome,
+    },
 };
 use std::path::PathBuf;
 
@@ -58,6 +62,8 @@ enum Command {
     Personas(Personas),
     #[command(subcommand)]
     Github(Github),
+    #[command(subcommand)]
+    Workers(Workers),
     History {
         #[arg(long)]
         project: Option<String>,
@@ -348,6 +354,91 @@ enum Github {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+}
+
+#[derive(Subcommand)]
+enum Workers {
+    /// List ready tasks whose dependencies are completed and that have no unexpired lease.
+    Eligible {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    List {
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, value_enum)]
+        status: Option<WorkerExecutionStatus>,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    Inspect {
+        #[arg(long)]
+        execution: String,
+    },
+    History {
+        #[arg(long)]
+        execution: String,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Acquire a coordination lease; this does not start or supervise a process.
+    Lease {
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        worker_label: String,
+        #[arg(long, default_value_t = 120)]
+        lease_seconds: u32,
+        #[arg(long, default_value_t = 4)]
+        max_active: u32,
+        #[arg(long)]
+        expected_task_revision: Option<u64>,
+        #[arg(long)]
+        expected_project_revision: Option<u64>,
+    },
+    Heartbeat {
+        #[arg(long)]
+        execution: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value_t = 120)]
+        lease_seconds: u32,
+    },
+    /// Record a deterministic mock checkpoint without editing files or completing the task.
+    Mock {
+        #[arg(long)]
+        execution: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value_t = 120)]
+        lease_seconds: u32,
+        #[arg(long)]
+        summary: String,
+        #[arg(long = "work-remaining")]
+        work_remaining: Vec<String>,
+        #[arg(long = "blocker")]
+        blockers: Vec<String>,
+    },
+    Release {
+        #[arg(long)]
+        execution: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, value_enum)]
+        outcome: WorkerReleaseOutcome,
+        #[arg(long)]
+        summary: Option<String>,
+    },
+    /// Expire overdue leases and return their assigned/running tasks to the queue.
+    Recover,
 }
 
 fn persona_claim(
@@ -713,6 +804,88 @@ async fn run(cli: Cli) -> Result<bool> {
                     after,
                     limit,
                 },
+                Command::Workers(Workers::Eligible { project, limit }) => {
+                    Operation::WorkerEligible {
+                        project_id: project,
+                        limit,
+                    }
+                }
+                Command::Workers(Workers::List {
+                    task,
+                    project,
+                    status,
+                    after,
+                    limit,
+                }) => Operation::WorkerExecutionsList {
+                    task_id: task,
+                    project_id: project,
+                    status,
+                    after,
+                    limit,
+                },
+                Command::Workers(Workers::Inspect { execution }) => Operation::WorkerExecutionGet {
+                    execution_id: execution,
+                },
+                Command::Workers(Workers::History {
+                    execution,
+                    after,
+                    limit,
+                }) => Operation::WorkerExecutionHistory {
+                    execution_id: execution,
+                    after,
+                    limit,
+                },
+                Command::Workers(Workers::Lease {
+                    task,
+                    worker_label,
+                    lease_seconds,
+                    max_active,
+                    expected_task_revision,
+                    expected_project_revision,
+                }) => Operation::WorkerLease(WorkerLeaseInput {
+                    task_id: task,
+                    worker_label,
+                    lease_seconds,
+                    max_active,
+                    expected_task_revision,
+                    expected_project_revision,
+                }),
+                Command::Workers(Workers::Heartbeat {
+                    execution,
+                    expected_revision,
+                    lease_seconds,
+                }) => Operation::WorkerHeartbeat(WorkerHeartbeatInput {
+                    execution_id: execution,
+                    expected_revision,
+                    lease_seconds,
+                }),
+                Command::Workers(Workers::Mock {
+                    execution,
+                    expected_revision,
+                    lease_seconds,
+                    summary,
+                    work_remaining,
+                    blockers,
+                }) => Operation::WorkerMockRun(WorkerMockInput {
+                    execution_id: execution,
+                    expected_revision,
+                    lease_seconds,
+                    summary,
+                    work_remaining,
+                    blockers,
+                }),
+                Command::Workers(Workers::Release {
+                    execution,
+                    expected_revision,
+                    outcome,
+                    summary,
+                }) => Operation::WorkerRelease(WorkerReleaseInput {
+                    execution_id: execution,
+                    expected_revision,
+                    outcome,
+                    summary,
+                }),
+                Command::Workers(Workers::Recover) => Operation::WorkerRecover,
                 _ => unreachable!(),
             };
             submit(&dir, cli.request_id, operation, cli.json).await

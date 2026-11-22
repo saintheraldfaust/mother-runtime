@@ -2,6 +2,10 @@ use crate::continuity::{DecisionInput, HandoffInput};
 use crate::github::{GithubIdentityAttach, GithubIdentityRevoke, GithubIdentityStatus};
 use crate::personas::{PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate};
 use crate::tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition};
+use crate::workers::{
+    WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput, WorkerMockInput,
+    WorkerReleaseInput,
+};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,6 +137,30 @@ pub enum Operation {
         after: u64,
         limit: u32,
     },
+    WorkerEligible {
+        project_id: Option<String>,
+        limit: u32,
+    },
+    WorkerExecutionsList {
+        task_id: Option<String>,
+        project_id: Option<String>,
+        status: Option<WorkerExecutionStatus>,
+        after: u64,
+        limit: u32,
+    },
+    WorkerExecutionGet {
+        execution_id: String,
+    },
+    WorkerExecutionHistory {
+        execution_id: String,
+        after: u64,
+        limit: u32,
+    },
+    WorkerLease(WorkerLeaseInput),
+    WorkerHeartbeat(WorkerHeartbeatInput),
+    WorkerMockRun(WorkerMockInput),
+    WorkerRelease(WorkerReleaseInput),
+    WorkerRecover,
 }
 
 impl Operation {
@@ -152,6 +180,11 @@ impl Operation {
                 | Self::PersonaSetStatus(_)
                 | Self::GithubIdentityAttach(_)
                 | Self::GithubIdentityRevoke(_)
+                | Self::WorkerLease(_)
+                | Self::WorkerHeartbeat(_)
+                | Self::WorkerMockRun(_)
+                | Self::WorkerRelease(_)
+                | Self::WorkerRecover
         )
     }
 }

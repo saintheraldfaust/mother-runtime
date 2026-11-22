@@ -57,6 +57,10 @@ pub(super) fn get(tx: &Transaction<'_>, id: &str) -> Result<Value> {
         Value::Null
     };
     value["latest_transition"]=tx.query_row("SELECT id,from_state,to_state,reason,source,task_revision,project_revision,created_at,persona_id,persona_revision FROM task_transitions WHERE task_id=?1 ORDER BY sequence DESC LIMIT 1",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"from_state":r.get::<_,String>(1)?,"to_state":r.get::<_,String>(2)?,"reason":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"task_revision":r.get::<_,i64>(5)?,"project_revision":r.get::<_,i64>(6)?,"created_at":r.get::<_,String>(7)?,"persona_id":r.get::<_,Option<String>>(8)?,"persona_revision":r.get::<_,Option<i64>>(9)?}))).optional()?.unwrap_or(Value::Null);
+    value["worker_execution"] = super::workers::for_task(tx, id)?.unwrap_or(Value::Null);
+    if !value["worker_execution"].is_null() {
+        value["execution_mode"] = json!("worker_leased");
+    }
     Ok(value)
 }
 

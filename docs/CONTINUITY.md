@@ -73,8 +73,8 @@ context records, then decisions, then other tasks are dropped until the budget
 fits. The focused task is retained; `omitted_tasks` counts excluded other tasks. Omission counts include both earlier records and byte-budget exclusions.
 Use normal paginated reads for history. Persona, authorization-policy, verified
 GitHub identity and repository-base scopes remain explicitly unavailable inside
-snapshots; identity metadata can be read separately. These are continuation
-snapshots, not complete worker execution snapshots. Historical package bytes and
+snapshots; identity metadata and worker lease state can be read separately. These are
+continuation snapshots, not complete execution snapshots. Historical package bytes and
 snapshot versions remain unchanged; omitting a task ID also preserves legacy
 mutation serialization for retry-key comparisons.
 

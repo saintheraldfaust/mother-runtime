@@ -7,9 +7,9 @@ the owner, and they do not protect against root or local database manipulation.
 Runtime lock files, configuration, and databases reject symlinks, insecure file
 modes, other owners, and hard links. Parent directories must also be trusted.
 
-The IPC surface contains project/context/decision/handoff/task operations, persona
-and read-only GitHub identity records, health, and event retrieval. File observations
-can read only task contract paths under a registered repository, subject to the
+The IPC surface contains project/context/decision/handoff/task operations, worker
+execution leases, persona and read-only GitHub identity records, health, and event
+retrieval. File observations can read only task contract paths under a registered repository, subject to the
 verifier limits. There is no general shell execution, credential broker, GitHub
 mutation, or worker startup. Local IPC can manage persona and identity authorization
 records under the same OS-user trust boundary. The owner-run CLI alone may invoke one
@@ -31,11 +31,30 @@ client model.
 
 MCP mutations append context/decisions, explicitly supersede decisions, create
 continuation packages, claim a handoff, mutate host-tracked task records, or manage
-persona revisions. MCP cannot create, verify or revoke GitHub identities.
+persona revisions. MCP cannot create, verify or revoke GitHub identities and cannot
+acquire, heartbeat, run, release or recover worker leases.
 Checkpoints and local completion perform bounded file observations. None grants
 independent execution authority. Tool annotations describe
 behavior and are not an authorization boundary. Persona-attributed task operations
 receive current-policy checks in the runtime; other surfaces still need them.
+
+### Worker lease boundary
+
+Worker executions are coordination records, not a sandbox or process supervisor.
+A lease prevents a second lease on the same task inside Mother's single-writer
+database and bounds concurrent unexpired leases. It does not lock the repository,
+stop task transitions, prove that work occurred or detect edits after expiry. Any
+same-UID process can edit files or send IPC with local-operator authority.
+
+The `mock` adapter only transitions an assigned task to `running` and writes the
+same checkpoint the checkpoint operation would write. It executes no command,
+reads only the task contract files, writes no repository content, runs no tests,
+and cannot complete a task. `release` updates only execution metadata. Expiry
+recovery returns assigned/running tasks to `ready`; other states require operator
+reconciliation. Mutating worker operations are CLI-only, while MCP exposes reads.
+
+A future worker process needs separate worktree, process, credential, budget and
+reconciliation controls before it can be described as isolated execution.
 
 ### GitHub identity boundary
 
@@ -109,7 +128,8 @@ records describe which runtime policy authorized the operation, not which human
 performed it. Completing a local task verifies
 its declared file contract only; free-form objectives and reported tests remain
 unverified. Review-required completion is blocked rather than accepting invented
-review/approval claims. State changes do not launch workers or terminate processes.
+review/approval claims. Task state changes do not launch or terminate processes;
+the mock runner only records a checkpoint.
 
 The file verifier anchors at the registered repository, rejects symlink traversal,
 hard links, and non-regular files, and limits read sizes. It exports hashes/sizes,

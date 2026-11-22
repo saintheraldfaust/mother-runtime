@@ -8,11 +8,12 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 mod continuity;
 mod github;
 mod personas;
 mod tasks;
+mod workers;
 
 pub struct Store {
     connection: Connection,
@@ -50,6 +51,9 @@ impl Store {
             if version < 5 {
                 transaction
                     .execute_batch(include_str!("../migrations/005_github_identities.sql"))?;
+            }
+            if version < 6 {
+                transaction.execute_batch(include_str!("../migrations/006_worker_leases.sql"))?;
             }
             transaction.commit()?;
         }
@@ -165,7 +169,7 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":false, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"deterministic_mock_checkpoint_only", "worker_process_supervision":false, "worker_repository_mutation":false, "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -362,6 +366,34 @@ fn apply(tx: &Transaction<'_>, request: &Request) -> Result<Value> {
             after,
             limit,
         } => github::history(tx, identity_id, *after, *limit),
+        Operation::WorkerEligible { project_id, limit } => {
+            workers::eligible(tx, project_id.as_deref(), *limit)
+        }
+        Operation::WorkerExecutionsList {
+            task_id,
+            project_id,
+            status,
+            after,
+            limit,
+        } => workers::list(
+            tx,
+            task_id.as_deref(),
+            project_id.as_deref(),
+            *status,
+            *after,
+            *limit,
+        ),
+        Operation::WorkerExecutionGet { execution_id } => workers::get(tx, execution_id),
+        Operation::WorkerExecutionHistory {
+            execution_id,
+            after,
+            limit,
+        } => workers::history(tx, execution_id, *after, *limit),
+        Operation::WorkerLease(input) => workers::lease(tx, request, input),
+        Operation::WorkerHeartbeat(input) => workers::heartbeat(tx, request, input),
+        Operation::WorkerMockRun(input) => workers::run_mock(tx, request, input),
+        Operation::WorkerRelease(input) => workers::release(tx, request, input),
+        Operation::WorkerRecover => workers::recover(tx, request),
     }
 }
 
@@ -916,7 +948,8 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 5);
+        assert_eq!(health["schema_version"], 6);
+        assert_eq!(health["execution_leases_supported"], true);
         assert_eq!(health["personas_supported"], true);
         assert_eq!(health["github_identity_records_supported"], true);
         assert_eq!(health["github_credential_storage"], false);
@@ -976,7 +1009,7 @@ mod tests {
         let mut store = Store::open(dir.path()).unwrap();
         assert_eq!(
             store.execute(&request(Operation::Health)).unwrap()["schema_version"],
-            5
+            6
         );
         let persona = store
             .execute(&request(Operation::PersonaGet {
@@ -993,5 +1026,44 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(identities["items"], json!([]));
+    }
+
+    #[test]
+    fn schema_five_upgrade_preserves_identities_and_adds_worker_leases() {
+        let (dir, _lock, connection) = legacy_database();
+        for migration in [
+            include_str!("../migrations/002_continuity.sql"),
+            include_str!("../migrations/003_tasks.sql"),
+            include_str!("../migrations/004_personas.sql"),
+            include_str!("../migrations/005_github_identities.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',1)",[]).unwrap();
+        connection.execute("INSERT INTO personas(id,name,role,description,responsibilities,prohibitions,capabilities,review_required,max_concurrency,status,revision) VALUES('persona','reviewer','review_engineer','Reviews changes','[]','[]','[\"github.read\"]',1,1,'active',1)",[]).unwrap();
+        connection.execute("INSERT INTO github_identities(id,host,account_id,login,profile_id,persona_id,persona_revision,operations,verification_method,status,revision,verified_at) VALUES('identity','github.com',42,'reviewer','profile','persona',1,'[\"read\"]','gh_api_user','active',1,'2026-11-20T00:00:00Z')",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        let health = store.execute(&request(Operation::Health)).unwrap();
+        assert_eq!(health["schema_version"], 6);
+        assert_eq!(health["workers_supported"], true);
+        assert_eq!(health["worker_process_supervision"], false);
+        assert_eq!(health["execution_leases_supported"], true);
+        let identities = store
+            .execute(&request(Operation::GithubIdentitiesList {
+                status: None,
+                persona_id: None,
+                after: 0,
+                limit: 20,
+            }))
+            .unwrap();
+        assert_eq!(identities["items"][0]["id"], "identity");
+        let eligible = store
+            .execute(&request(Operation::WorkerEligible {
+                project_id: Some("legacy".into()),
+                limit: 20,
+            }))
+            .unwrap();
+        assert_eq!(eligible["items"], json!([]));
     }
 }

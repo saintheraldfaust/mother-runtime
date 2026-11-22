@@ -29,7 +29,7 @@ be dropped with omission counts. All list pages also cap serialized item bytes.
 Alternatives: accepting a model's completed flag would lose evidence; executing
 arbitrary test strings would create an unrestricted shell boundary; pretending an
 owner label is a persona would introduce authority confusion. General tests,
-independent review, worker leases, and live persona policies remain separate work.
+independent review, supervised worker processes, and mandatory persona policies remain separate work.
 
 Schema migration 3 adds tasks, dependency edges, immutable checkpoints, and immutable
 transition history. Task state, evidence, revision changes, events, and retry results

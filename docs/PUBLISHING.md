@@ -140,4 +140,4 @@ At each publication milestone report the repository/branch, confirmed commit has
 commit messages, included/excluded categories, actual scan/test results, documentation
 changes, unresolved warnings and next objective. Avoid credentials, unnecessary
 personal information and sensitive paths. Publication does not establish production
-readiness, credential isolation, review approval or worker execution support.
+readiness, credential isolation, review approval or supervised worker execution support.

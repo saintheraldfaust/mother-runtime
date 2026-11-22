@@ -11,6 +11,7 @@ pub mod protocol;
 pub mod runtime;
 pub mod store;
 pub mod tasks;
+pub mod workers;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

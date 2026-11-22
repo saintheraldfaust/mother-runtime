@@ -8,7 +8,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The suite contains 27 unit tests and ten process integration tests.
+The suite contains 31 unit tests and eleven process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -31,7 +31,14 @@ Unit coverage:
   malformed, organization and invalid-ID responses.
 - GitHub identity records require an active `github.read` persona, reject duplicate
   active bindings, and preserve immutable authorization/revocation revisions.
-  Schema 4→5 upgrade preserves personas and adds identity tables.
+  Schema 4→5 upgrade preserves personas and adds identity tables. Schema 5→6
+  preserves identities and adds worker lease tables.
+- Worker eligibility excludes tasks with incomplete dependencies or an unexpired
+  lease. One active lease per task and the global `max_active` bound are enforced.
+- Heartbeats extend leases and reject stale revisions. Expired leases are recovered
+  explicitly and during reacquisition, with attempt increments and history retained.
+- The mock adapter writes an ordinary checkpoint, leaves repository files unchanged,
+  cannot complete a task, and is rejected after expiry or a stale revision.
 
 Process integration coverage:
 
@@ -117,6 +124,7 @@ Persona process coverage:
 Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
 macOS and Linux validation; no hosted CI run is claimed. No interactive coding-assistant host, coding
 provider, mandatory-persona authorization, real GitHub account login, GitHub write,
-credential broker, remote workflow, independent-worker recovery, performance target,
-power-loss, or hostile same-UID isolation test has been performed. GitHub identity
+credential broker, remote workflow, supervised-worker process, worktree isolation,
+test execution, performance target, power-loss, or hostile same-UID isolation test
+has been performed. GitHub identity
 coverage uses a fake `gh`; it is not certification with a real account.

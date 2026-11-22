@@ -44,7 +44,7 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_handoff_resume` | `idempotency_key`, nested `input: {handoff_id, recipient, expected_revision}` | One durable claim; no worker is launched. |
 | `mother_task_create` | `idempotency_key`, nested `TaskInput` | Host-tracked task contract, IDs and revisions. |
 | `mother_tasks_list` | `project_id`; optional `state`, `after`, `limit` | Task summaries and current project revision. |
-| `mother_task_get` | `task_id` | Task, latest checkpoint/transition, dependencies and limited evidence. |
+| `mother_task_get` | `task_id` | Task, latest checkpoint/transition, dependencies, limited evidence and active worker lease. |
 | `mother_task_transition` | `idempotency_key`, nested `TaskTransition`; optional `persona` claim | Allowed state update with task/project revision, evidence gates and current-persona capability checks. |
 | `mother_task_checkpoint` | `idempotency_key`, nested `CheckpointInput`; optional `persona` claim | Immutable progress submission plus runtime file observations and optional persona checks. |
 | `mother_task_checkpoints_list` | `task_id`; optional `after`, `limit` | Immutable checkpoint pages. |
@@ -58,6 +58,10 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_github_identities_list` | Optional `status`, `persona_id`, `after`, `limit` | Verified read-only GitHub identity records; no credentials. |
 | `mother_github_identity_get` | `identity_id` | One identity, persona binding, verification limits and revocation state. |
 | `mother_github_identity_history` | `identity_id`; optional `after`, `limit` | Immutable identity authorization revisions. |
+| `mother_worker_eligible_tasks` | Optional `project_id`, `limit` | Bounded ready tasks with completed dependencies and no unexpired lease. |
+| `mother_worker_executions_list` | Optional `task_id`, `project_id`, `status`, `after`, `limit` | Worker leases with expiry, revision and coordination-only limits. |
+| `mother_worker_execution_get` | `execution_id` | One lease, task state, revision, expiry and result. |
+| `mother_worker_execution_history` | `execution_id`; optional `after`, `limit` | Immutable lease, heartbeat, mock-checkpoint, release and expiry events. |
 | `mother_activity_get` | Optional `project_id`, `after`, `limit` | `items`, `next_cursor`, project `revision` when scoped. |
 
 Pagination defaults to `after=0`, `limit=20`, with `1..=100` records per page. Pass
@@ -87,6 +91,7 @@ always query the service. No bridge cache can hide CLI changes.
 - `mother://handoffs/{handoff_id}`: immutable package plus live revision and claim.
 - `mother://personas/{persona_id}`: current persona revision and capabilities.
 - `mother://github-identities/{identity_id}`: verified identity metadata and limits.
+- `mother://worker-executions/{execution_id}`: worker lease and task coordination.
 - `mother://projects/{project_id}`: project identity with current revision.
 - `mother://projects/{project_id}/context`: first 20 context records with current
   revision and `next_cursor`; use `mother_context_get` for remaining pages.
@@ -102,6 +107,12 @@ GitHub identity tools are read-only. Identity verification and revocation are
 CLI-only owner actions. MCP never receives tokens, credential values, profile paths
 or arbitrary GitHub operation access. A verified record is not a sandbox and does
 not make task operations require a persona.
+
+Worker tools are read-only. Lease acquisition, heartbeat, mock execution, release
+and recovery are CLI-only. A lease coordinates an external runner inside Mother's
+database; it does not launch, supervise or stop a process, prove execution, grant
+identity, authorize repository writes or complete a task. The mock adapter writes
+only an ordinary checkpoint.
 
 ## Transport and failure behavior
 
@@ -155,7 +166,7 @@ successful configuration parsing alone is insufficient.
 
 An optional [project instruction example](../examples/mcp/PROJECT_INSTRUCTIONS.md)
 teaches a host to refresh Mother's state without copying persona definitions.
-Persona tools, independent workers, GitHub credentials, HTTP transport, and host
+Worker dispatch mutations, GitHub credentials, HTTP transport and host
 subscription support are outside this slice.
 
 ## Decision and handoff input models

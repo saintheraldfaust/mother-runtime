@@ -1,9 +1,12 @@
 # Host-tracked tasks and checkpoints
 
-Mother now persists task contracts, dependency IDs, state transitions, checkpoints,
-and narrowly scoped file evidence. `execution_mode` is always `host_tracked`, and
-`worker_execution` is null. A `running` record describes reported host work; Mother
-has not launched a process. `workers_supported` remains false in health.
+Mother persists task contracts, dependency IDs, state transitions, checkpoints,
+narrowly scoped file evidence, and durable worker execution leases. A task without
+a lease reports `execution_mode: host_tracked` and null `worker_execution`; a leased
+task reports `worker_leased` plus its active execution. A `running` record still
+describes reported work, not proof that Mother launched or supervised a process.
+The only adapter is a deterministic mock that writes a checkpoint and never edits
+a repository or completes a task.
 
 ## Contracts and revisions
 
@@ -134,13 +137,17 @@ motherctl --request-id triage-1 tasks transition --task TASK_ID \
 motherctl --request-id checkpoint-1 tasks checkpoint --file task-checkpoint.json
 motherctl tasks checkpoints --task TASK_ID
 motherctl tasks history --task TASK_ID
+motherctl workers eligible --project PROJECT_ID
+motherctl workers list --task TASK_ID
+motherctl workers history --execution EXECUTION_ID
 ```
 
 The checkpoint example assumes a newly created task; set its task ID and expected
 revision to the current values before using it. Continue through the explicit state
 path, adding `--owner-label LABEL` for assignment. CLI multiword state values use
 hyphens; JSON/MCP state values use underscores. See [MCP schemas](MCP.md) for the
-seven task tools and the `mother://tasks/{task_id}` resource.
+seven task tools and the `mother://tasks/{task_id}` resource. Worker
+reads use four dedicated tools and `mother://worker-executions/{execution_id}`.
 
 Task lists return summaries; inspect returns the latest checkpoint and transition,
 criteria, dependency IDs, and completion evidence. Checkpoint and transition history
@@ -153,9 +160,59 @@ Snapshots also select up to 20 other unfinished tasks by latest project mutation
 with omission counts and the existing snapshot byte budget. Old packages remain
 unchanged even after a task completes; query live task state when continuing.
 
+## Worker execution leases
+
+A lease is durable coordination metadata, not a process or permission. It records
+an execution ID, task/project, worker label, attempt, lease duration, expiry,
+heartbeat, revision, status, and a bounded result. At most one execution can be
+active per task, and callers supply a global `max_active` bound (1–64). The store
+checks dependencies, task state and bounds transactionally.
+
+Only a `ready` task can be leased. Acquisition transitions it to `assigned`, sets
+the worker label as owner, and creates a `leased` execution. The worker label is
+self-reported coordination data, not a persona or verified identity. Start the
+mock adapter, extend the lease, or release it explicitly:
+
+```sh
+motherctl workers eligible --project PROJECT_ID
+motherctl --request-id lease-1 workers lease --task TASK_ID \
+  --worker-label mock-a --lease-seconds 120 --max-active 4
+motherctl workers inspect --execution EXECUTION_ID
+motherctl workers heartbeat --execution EXECUTION_ID \
+  --expected-revision 1 --lease-seconds 120
+motherctl workers mock --execution EXECUTION_ID \
+  --expected-revision 2 --summary 'Mock checkpoint only'
+motherctl workers release --execution EXECUTION_ID \
+  --expected-revision 3 --outcome failed --summary 'Stopped before verification'
+```
+
+Lease durations are 1–3600 seconds. Heartbeats require the current execution
+revision and extend expiry from the current time. A stale, released or expired
+execution cannot heartbeat. Execution statuses are `leased`, `running`, `released`,
+`failed`, `expired`, and `completed`; only the first two are active.
+
+The mock adapter requires an assigned/running task, transitions an assigned task to
+`running`, writes a normal checkpoint with source `mock-worker`, and extends the
+lease. It performs no repository reads beyond the ordinary checkpoint contract,
+no writes, no test execution, and no completion. Its response explicitly reports
+`repository_mutation: false` and `completion: false`.
+
+Expiry recovery is explicit (`workers recover`) or occurs when reacquiring the same
+task. An expired execution is marked `expired`. An `assigned` task returns to
+`ready`; a `running` task returns through `awaiting_input` to `ready`; other task
+states are left for operator reconciliation. Recovery preserves history and sets
+a new attempt on the next lease. Leases persist across runtime restarts.
+
+A lease is not an OS lock, sandbox, process supervisor, identity assertion, or
+write authorization. A same-UID process can still edit files or submit task
+transitions, and Mother cannot detect work performed after expiry. Read worker
+state through MCP; lease, heartbeat, mock-run, release and recovery mutations are
+CLI-only. See [ADR 0006](DECISIONS/0006-worker-lease-boundary.md).
+
 ## Remaining execution work
 
-No worker scheduling, process leases, worktrees, provider adapters, automatic retries,
-credential broker, test runner, review verifier, or human-approval workflow exists.
-The next milestone is a versioned persona registry and runtime-enforced live
-capabilities before independent execution or external writes are added.
+A real supervised worker, provider adapter, isolated worktree, automatic retry,
+credential broker, test runner, review verifier, and human-approval workflow remain
+unimplemented. The mock adapter proves scheduling, checkpointing, bounded
+concurrency, lease recovery, and restart persistence only. GitHub writes and
+credential brokering remain separate boundaries.

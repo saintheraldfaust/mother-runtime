@@ -7,6 +7,7 @@ use crate::{
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request, Response},
     runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
+    workers::WorkerExecutionStatus,
 };
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
@@ -198,6 +199,41 @@ struct CheckpointPage {
     #[schemars(range(min = 1, max = 100))]
     limit: u32,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WorkerEligiblePage {
+    project_id: Option<String>,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WorkerExecutionId {
+    execution_id: String,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WorkerExecutionsPage {
+    task_id: Option<String>,
+    project_id: Option<String>,
+    status: Option<WorkerExecutionStatus>,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WorkerHistoryPage {
+    execution_id: String,
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    limit: u32,
+}
 
 fn schema<T: JsonSchema>() -> JsonObject {
     schemars::schema_for!(T)
@@ -365,6 +401,26 @@ fn tools() -> Vec<Tool> {
             "Read immutable GitHub identity authorization revision history.",
             true,
         ),
+        tool::<WorkerEligiblePage>(
+            "mother_worker_eligible_tasks",
+            "List bounded ready tasks with completed dependencies and no unexpired worker lease. Selection is advisory; leases are acquired by the owner-run CLI only.",
+            true,
+        ),
+        tool::<WorkerExecutionsPage>(
+            "mother_worker_executions_list",
+            "List durable worker execution leases, optionally filtered by task, project or status. Leases coordinate external runners; they do not prove execution, supervise processes or authorize writes.",
+            true,
+        ),
+        tool::<WorkerExecutionId>(
+            "mother_worker_execution_get",
+            "Read one worker lease, its revision, expiry, task state and explicit coordination-only limits.",
+            true,
+        ),
+        tool::<WorkerHistoryPage>(
+            "mother_worker_execution_history",
+            "Read immutable worker lease, heartbeat, mock-checkpoint, release and expiry events.",
+            true,
+        ),
     ]
 }
 
@@ -432,7 +488,7 @@ impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("mother",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed, and this build supports no GitHub writes or independent workers.")
+            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed. Worker execution leases coordinate external runners but do not supervise processes, prove execution, complete tasks or authorize repository writes. This build supports no GitHub writes.")
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -709,6 +765,49 @@ impl ServerHandler for Bridge {
                     None,
                 )
             }
+            "mother_worker_eligible_tasks" => {
+                let p: WorkerEligiblePage = parse(args)?;
+                (
+                    Operation::WorkerEligible {
+                        project_id: p.project_id,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
+            "mother_worker_executions_list" => {
+                let p: WorkerExecutionsPage = parse(args)?;
+                (
+                    Operation::WorkerExecutionsList {
+                        task_id: p.task_id,
+                        project_id: p.project_id,
+                        status: p.status,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
+            "mother_worker_execution_get" => {
+                let p: WorkerExecutionId = parse(args)?;
+                (
+                    Operation::WorkerExecutionGet {
+                        execution_id: p.execution_id,
+                    },
+                    None,
+                )
+            }
+            "mother_worker_execution_history" => {
+                let p: WorkerHistoryPage = parse(args)?;
+                (
+                    Operation::WorkerExecutionHistory {
+                        execution_id: p.execution_id,
+                        after: p.after,
+                        limit: p.limit,
+                    },
+                    None,
+                )
+            }
             _ => {
                 return Err(ErrorData::new(
                     ErrorCode::METHOD_NOT_FOUND,
@@ -776,6 +875,11 @@ impl ServerHandler for Bridge {
                     "Verified GitHub identity record",
                 )
                 .with_mime_type("application/json"),
+                ResourceTemplate::new(
+                    "mother://worker-executions/{execution_id}",
+                    "Worker execution lease and task coordination state",
+                )
+                .with_mime_type("application/json"),
             ],
             ..Default::default()
         })
@@ -829,6 +933,14 @@ fn resource_operation(uri: &str) -> std::result::Result<Operation, ErrorData> {
     {
         return Ok(Operation::GithubIdentityGet {
             identity_id: id.into(),
+        });
+    }
+    if let Some(id) = uri.strip_prefix("mother://worker-executions/")
+        && let Ok(uuid) = uuid::Uuid::parse_str(id)
+        && uuid.to_string() == id
+    {
+        return Ok(Operation::WorkerExecutionGet {
+            execution_id: id.into(),
         });
     }
     if let Some(id) = uri.strip_prefix("mother://handoffs/")

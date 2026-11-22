@@ -30,6 +30,15 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `tasks checkpoint --file FILE` | Persist progress and runtime observations of the task contract files. |
 | `tasks checkpoints --task ID [--after N] [--limit N]` | Retrieve immutable checkpoint history. |
 | `tasks history --task ID [--after N] [--limit N]` | Retrieve transition reasons, sources and revisions. |
+| `workers eligible [--project ID] [--limit N]` | List bounded ready tasks with completed dependencies and no unexpired lease. |
+| `workers list [--task ID] [--project ID] [--status STATUS] [--after N] [--limit N]` | Page through worker execution leases. |
+| `workers inspect --execution ID` | Read one lease, task state, expiry and coordination-only limits. |
+| `workers history --execution ID [--after N] [--limit N]` | Retrieve immutable lease, heartbeat, mock-checkpoint, release and expiry events. |
+| `workers lease --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease; no process is launched. |
+| `workers heartbeat --execution ID --expected-revision N [--lease-seconds N]` | Extend an active lease from the current time. |
+| `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
+| `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state. |
+| `workers recover` | Expire overdue leases and requeue assigned/running tasks. |
 | `history [--project ID] [--after N] [--limit N]` | Retrieve committed events, optionally project-scoped. |
 | `personas create --file FILE` | Create a revisioned persona definition from bounded JSON. |
 | `personas list [--status STATUS] [--project ID] [--after N] [--limit N]` | Page through personas, optionally filtered by status or project scope. |
@@ -88,3 +97,8 @@ GitHub account setup is owner-run and read-only. `github profile` creates a
 private profile directory; the account owner completes `gh auth login` with
 `GH_CONFIG_DIR` set to it; `github connect` verifies the account and records the
 identity. No token is stored or returned. See [GitHub identities](IDENTITIES.md).
+
+Worker leases default to 120 seconds and four active leases. They coordinate
+external runners inside Mother's database only; they are not OS locks, process
+supervision, identity proof or write authorization. The mock adapter no-ops beyond
+a normal checkpoint. See [worker leases](ORCHESTRATION.md#worker-execution-leases).

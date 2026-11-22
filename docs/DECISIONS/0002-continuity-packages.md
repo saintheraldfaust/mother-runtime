@@ -25,7 +25,7 @@ project has not changed since package creation, plus the caller's expected
 revision. Serialize the claim with project revision and audit state. An identical
 request retry replays its result; another claimant fails. Recipient strings route
 work but are not identities or permissions. New packages represent reassignment;
-execution leases remain future task-engine work.
+handoff execution leases remain future task-engine work.
 
 Alternatives: a mutable summary would lose the original continuation boundary;
 full-history snapshots would grow without bounds; automatic natural-language

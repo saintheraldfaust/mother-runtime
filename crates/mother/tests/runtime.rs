@@ -380,7 +380,7 @@ async fn mcp_shared_state_scenario() {
         rmcp::model::ProtocolVersion::V_2025_11_25
     );
     let tools = a.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 29);
+    assert_eq!(tools.len(), 33);
     assert!(tools.iter().all(|t| t.output_schema.is_some()));
     let write_tool = tools
         .iter()
@@ -488,7 +488,7 @@ async fn mcp_shared_state_scenario() {
         "CLI test failed"
     );
     assert_eq!(b.list_all_resources().await.unwrap().len(), 1);
-    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 6);
+    assert_eq!(b.list_all_resource_templates().await.unwrap().len(), 7);
     let resource = b
         .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
             "mother://projects/{id}/context"
@@ -1340,6 +1340,244 @@ async fn persona_live_policy_scenario() {
     a.cancel().await.ok();
     b.cancel().await.ok();
     service.stop();
+}
+
+#[tokio::test]
+async fn worker_leases_schedule_checkpoint_and_recover_across_restart() {
+    tokio::time::timeout(Duration::from_secs(45), worker_lease_scenario())
+        .await
+        .expect("worker scenario timed out");
+}
+
+async fn worker_lease_scenario() {
+    use serde_json::json;
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut runtime = Runtime::start(&dir);
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "Workers",
+            "--repository",
+            repo.to_str().unwrap(),
+        ],
+    );
+    let project_id = project["result"]["id"].as_str().unwrap();
+    let contract = json!({"project_id":project_id,"title":"Scheduled work","objective":"Exercise leases","source":"test",
+        "acceptance_criteria":[{"path":"artifact"}]});
+    let file = temp.path().join("worker-task.json");
+    std::fs::write(&file, serde_json::to_vec(&contract).unwrap()).unwrap();
+    let task = success(&dir, &["tasks", "create", "--file", file.to_str().unwrap()]);
+    let task_id = task["result"]["id"].as_str().unwrap();
+    let mut revision = 1;
+    for state in ["triaged", "ready"] {
+        let revision_arg = revision.to_string();
+        let step = success(
+            &dir,
+            &[
+                "tasks",
+                "transition",
+                "--task",
+                task_id,
+                "--state",
+                state,
+                "--source",
+                "test",
+                "--reason",
+                "prepare",
+                "--expected-task-revision",
+                &revision_arg,
+            ],
+        );
+        revision = step["result"]["task_revision"].as_u64().unwrap();
+    }
+    let eligible = success(&dir, &["workers", "eligible", "--project", project_id]);
+    assert_eq!(eligible["result"]["count"], 1);
+    let lease = success(
+        &dir,
+        &[
+            "workers",
+            "lease",
+            "--task",
+            task_id,
+            "--worker-label",
+            "mock-a",
+            "--lease-seconds",
+            "120",
+            "--max-active",
+            "1",
+        ],
+    );
+    let execution_id = lease["result"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(lease["result"]["task_state"], "assigned");
+    assert_eq!(lease["result"]["revision"], 1);
+    let leased_task = success(&dir, &["tasks", "inspect", "--task", task_id]);
+    assert_eq!(leased_task["result"]["execution_mode"], "worker_leased");
+    assert_eq!(
+        leased_task["result"]["worker_execution"]["id"],
+        execution_id
+    );
+    let heartbeat = success(
+        &dir,
+        &[
+            "workers",
+            "heartbeat",
+            "--execution",
+            &execution_id,
+            "--expected-revision",
+            "1",
+            "--lease-seconds",
+            "60",
+        ],
+    );
+    assert_eq!(heartbeat["result"]["revision"], 2);
+    let mocked = success(
+        &dir,
+        &[
+            "workers",
+            "mock",
+            "--execution",
+            &execution_id,
+            "--expected-revision",
+            "2",
+            "--summary",
+            "Mock checkpoint only",
+        ],
+    );
+    assert_eq!(mocked["result"]["execution"]["status"], "running");
+    assert_eq!(mocked["result"]["execution"]["revision"], 3);
+    assert_eq!(mocked["result"]["task"]["state"], "running");
+    assert_eq!(mocked["result"]["limits"]["repository_mutation"], false);
+
+    let second = success(&dir, &["tasks", "create", "--file", file.to_str().unwrap()]);
+    let second_id = second["result"]["id"].as_str().unwrap();
+    let mut second_revision = 1;
+    for state in ["triaged", "ready"] {
+        let revision_arg = second_revision.to_string();
+        let step = success(
+            &dir,
+            &[
+                "tasks",
+                "transition",
+                "--task",
+                second_id,
+                "--state",
+                state,
+                "--source",
+                "test",
+                "--reason",
+                "prepare",
+                "--expected-task-revision",
+                &revision_arg,
+            ],
+        );
+        second_revision = step["result"]["task_revision"].as_u64().unwrap();
+    }
+    let short = success(
+        &dir,
+        &[
+            "workers",
+            "lease",
+            "--task",
+            second_id,
+            "--worker-label",
+            "mock-b",
+            "--lease-seconds",
+            "1",
+            "--max-active",
+            "2",
+        ],
+    );
+    assert_eq!(short["result"]["status"], "leased");
+    thread::sleep(Duration::from_millis(1200));
+
+    runtime.crash();
+    drop(runtime);
+    let mut restarted = Runtime::start(&dir);
+    let recovered = success(&dir, &["workers", "recover"]);
+    assert_eq!(recovered["result"]["count"], 1);
+    assert_eq!(recovered["result"]["expired"][0]["status"], "expired");
+    let requeued = success(&dir, &["tasks", "inspect", "--task", second_id]);
+    assert_eq!(requeued["result"]["state"], "ready");
+    assert!(requeued["result"]["worker_execution"].is_null());
+
+    let mcp = mcp_client(&dir, false).await;
+    let listed = tool(&mcp, "mother_worker_executions_list", json!({}))
+        .await
+        .structured_content
+        .unwrap();
+    assert!(
+        listed["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == execution_id)
+    );
+    let inspected = tool(
+        &mcp,
+        "mother_worker_execution_get",
+        json!({"execution_id":execution_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(inspected["result"]["revision"], 3);
+    assert_eq!(inspected["result"]["process_supervised"], false);
+    let history = tool(
+        &mcp,
+        "mother_worker_execution_history",
+        json!({"execution_id":execution_id}),
+    )
+    .await
+    .structured_content
+    .unwrap();
+    assert_eq!(history["result"]["items"].as_array().unwrap().len(), 3);
+    let eligible = tool(&mcp, "mother_worker_eligible_tasks", json!({}))
+        .await
+        .structured_content
+        .unwrap();
+    assert!(
+        eligible["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == second_id)
+    );
+    let resource = mcp
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
+            "mother://worker-executions/{execution_id}"
+        )))
+        .await
+        .unwrap();
+    let serialized = serde_json::to_value(resource).unwrap();
+    let contents: Value =
+        serde_json::from_str(serialized["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(contents["result"]["id"], execution_id);
+    mcp.cancel().await.unwrap();
+
+    let released = success(
+        &dir,
+        &[
+            "workers",
+            "release",
+            "--execution",
+            &execution_id,
+            "--expected-revision",
+            "3",
+            "--outcome",
+            "failed",
+            "--summary",
+            "scenario finished",
+        ],
+    );
+    assert_eq!(released["result"]["status"], "failed");
+    restarted.stop();
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `tasks`: typed host-tracked task contracts and explicit state graph.
 - `personas`: typed persona definitions, statuses, capabilities and authorization claims.
 - `github`: typed read-only GitHub identity records and the fixed `gh api user` verifier.
+- `workers`: typed execution-lease inputs, statuses, outcomes and mock-checkpoint limits.
 - `evidence`: bounded descriptor-relative repository file observations.
 - `store/tasks`: task/dependency persistence, immutable checkpoints/transitions,
   optimistic revisions, and local file-contract completion gates.
@@ -19,6 +20,8 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
   project scope and capability enforcement for asserted task operations.
 - `store/github`: verified GitHub identity records, persona bindings, immutable
   revision history, revocation and paginated read-only metadata.
+- `store/workers`: transactional dependency-aware lease acquisition, bounded
+  concurrency, heartbeats, expiry recovery, release and mock checkpoints.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
 - `main`: Clap command grammar and JSON presentation.
@@ -40,7 +43,8 @@ on blocking threads, under a mutex around one connection. Active client tasks
 are bounded by `max_clients` (default 32, maximum 128). SQL uses parameters and
 indexed project/sequence queries. No network listener or general shell executor exists.
 The owner-run CLI may invoke one fixed read-only `gh api user` verification command;
-the runtime itself does not execute GitHub commands.
+the runtime itself does not execute GitHub commands. Worker lease operations are
+SQLite coordination: the runtime does not launch, supervise or signal processes.
 
 Each socket connection carries one newline-terminated request and response.
 Requests are limited to 64 KiB and responses to 4 MiB, with five-second read/write
@@ -64,7 +68,7 @@ socket can be removed at startup; ordinary files and symlinks are refused. A kil
 process releases the OS lock, permitting restart against the same database.
 
 TOML is authoritative only for startup transport settings. SQLite is authoritative
-for project, context, persona and GitHub identity records. Configuration is applied by restarting the
+for project, context, persona, GitHub identity and worker execution records. Configuration is applied by restarting the
 service, with strict field and version validation. Persona updates are runtime
 operations with their own revisions; editing TOML does not update them.
 
@@ -77,13 +81,15 @@ continuity boundary and conservative claim semantics.
 Schema 3 adds host-tracked tasks. Schema 4 adds versioned personas, immutable
 persona revision snapshots/audit rows and optional persona attribution on task
 transitions/checkpoints. Schema 5 adds read-only verified GitHub identity records,
-persona bindings, revocation and immutable identity revisions/events. File observation runs on the runtime
+persona bindings, revocation and immutable identity revisions/events. Schema 6 adds
+worker execution leases and immutable lease events. File observation runs on the runtime
 blocking threads within a state transaction, without invoking any shell or provider.
 Filesystem observations are not transactional with SQLite; they are point-in-time
 evidence with size/path restrictions. Completion rechecks the latest validating
 checkpoint. See [ADR 0003](DECISIONS/0003-host-tracked-tasks.md) and
 [ADR 0004](DECISIONS/0004-persona-policy.md) and
-[ADR 0005](DECISIONS/0005-github-identity-boundary.md).
+[ADR 0005](DECISIONS/0005-github-identity-boundary.md) and
+[ADR 0006](DECISIONS/0006-worker-lease-boundary.md).
 
 Lists cap both item count and approximately 1 MiB of serialized item data. Cursors
 advance only to the final returned item, so byte-limited pages do not lose records.
