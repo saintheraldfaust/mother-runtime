@@ -27,7 +27,17 @@ the foundational runtime. Exact resolved dependencies are in `Cargo.lock`.
   details are maintained in [MCP documentation](MCP.md). No settings were changed
   and no interactive host session is claimed.
 
-No authentication or provider API is called by the implemented feature set.
+For the worker provider slice, inspected the installed OpenCode 1.19.6
+`opencode run --help` and source tag `v1.19.6` from
+[anomalyco/opencode](https://github.com/anomalyco/opencode). The installed CLI does
+not accept `--standalone`; its non-interactive `run` path uses an in-process server.
+`run --format json` emits newline-delimited events with a top-level `sessionID`, and
+step-finish parts carry provider-reported cost and tokens. Version 1.19.6 keeps
+credentials in its data database, so this adapter retains host `HOME` and the host
+data store for an existing login while isolating OpenCode configuration. Provider
+tests use a fake executable; no authenticated or paid provider call is claimed.
+
+No other authentication or provider API is called by the implemented feature set.
 Research those interfaces immediately before the relevant implementation rather
 than making unverified integration claims now.
 
