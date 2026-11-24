@@ -14,7 +14,7 @@ under a registered repository, subject to the verifier limits. There is no gener
 shell execution, credential broker, GitHub mutation, or arbitrary worker startup.
 Local IPC can manage persona and identity authorization records under the same
 OS-user trust boundary. The owner-run CLI alone may invoke one fixed `gh api user`
-identity-verification command and supervise the fixed deterministic mock helper.
+identity-verification command and supervise the mock helper or OpenCode CLI adapter.
 
 All local clients currently have operator-level access to all registered projects.
 Do not expose the socket through network forwarding or give untrusted processes
@@ -56,19 +56,38 @@ tests, and cannot complete a task. `release` updates only execution metadata.
 verifies that the task can be leased, resolves the registered repository's current
 commit, and creates a detached Git worktree inside the private worker directory.
 Git commands disable hooks and fsmonitor and set `GIT_TERMINAL_PROMPT=0` with a
-failing askpass. The fixed helper runs in its own process group with a cleared
-environment, a worktree `HOME`, and inherited OS-user authority. It can write only
-the deterministic `worker-output.txt` by design, but this is not enforced filesystem
-isolation: a same-UID process could access other files. The worktree prevents
-concurrent-checkout collisions, not hostile access.
+failing askpass. The selected adapter runs in its own process group with inherited
+OS-user authority. The mock helper receives a cleared environment and a worktree
+`HOME`; it can write only the deterministic `worker-output.txt` by design, but this
+is not enforced filesystem isolation. The worktree prevents concurrent-checkout
+collisions, not hostile access.
 
 The supervisor captures at most 64 KiB of stdout and stderr into a 0600 log, attaches
-the PID, heartbeats the lease, sends SIGTERM/SIGKILL to the process group on timeout,
-and records bounded observations of declared acceptance criteria. Successful exit
-moves a running task to `awaiting_input`; failure or timeout moves it to `failed`.
-No path completes a task. Worktrees are retained; `workers cleanup` removes only an
-inactive execution's worktree and prunes Git metadata. If a lease expires while a
-process may still run, recovery marks the task `blocked` instead of requeueing it.
+the PID, heartbeats the lease, sends SIGTERM/SIGKILL to the process group on timeout
+or budget exhaustion, and records bounded observations of declared acceptance
+criteria. Successful exit moves a running task to `awaiting_input`; failure, timeout
+or budget exhaustion moves it to `failed`. No path completes a task. Worktrees are
+retained; `workers cleanup` removes only an inactive execution's worktree and prunes
+Git metadata. If a lease expires while a process may still run, recovery marks the
+task `blocked` instead of requeueing it.
+
+The OpenCode adapter runs `opencode run --format json --pure --auto`
+with a required model, positive provider-reported cost ceiling, step ceiling and
+timeout. It uses the owner's existing OpenCode login, an isolated OpenCode config
+under the private execution directory, project config disabled, and an environment
+allowlist rather than a full environment copy. The host OpenCode data store remains
+available because 1.19.6 keeps credentials there, so provider sessions can persist
+outside Mother. Mother does not copy, store, return or broker provider credentials.
+
+`--auto` authorizes provider tool execution without interactive approval. The
+provider process still has the owner's OS-user authority: it may access the network,
+files outside the worktree, SSH/GitHub credentials in the host home, and any tool the
+provider exposes. The task prompt is untrusted input, not an authorization grant.
+The worktree is not a sandbox. Provider-reported cost/token telemetry is parsed into
+bounded metadata and raw output into a bounded log; hidden reasoning is not stored.
+Cost is not independently metered, so the ceiling is not a billing guarantee and a
+provider can underreport or delay events. Provider text and token counts are not
+completion evidence.
 
 If the supervisor is killed, the owner must reconcile the stale process explicitly.
 `workers abandon` checks PID existence and refuses without `--force`, then records
@@ -78,8 +97,9 @@ or prevent PID reuse. It is not an automatic reaper.
 
 Expiry recovery may still miscategorize late work, and process PIDs are not
 authenticated worker identity. Mutating worker operations are CLI-only, while MCP
-exposes reads. Provider credentials, budgets, sandbox isolation, test execution,
-automatic retry, and independent evidence reconciliation remain unimplemented.
+exposes reads. Provider credentials are host-managed and not brokered; sandbox
+isolation, independent spend metering, test execution, automatic retry, and
+independent evidence reconciliation remain unimplemented.
 
 ### GitHub identity boundary
 

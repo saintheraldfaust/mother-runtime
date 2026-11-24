@@ -1,15 +1,15 @@
 format_version = 1
-updated_on = "2026-11-22"
+updated_on = "2026-11-24"
 directive = "MOTHER.md"
-milestone = "Owner-run supervised deterministic mock processes with isolated Git worktrees, durable leases, bounded evidence and explicit abandoned-process reconciliation"
-next_objective = "Add a provider-backed worker adapter under the owner-run supervisor with explicit budgets, cancellation and evidence reconciliation; keep GitHub writes and credential brokering separate"
+milestone = "Owner-run supervised mock and OpenCode CLI worker adapters with isolated Git worktrees, durable leases, explicit budgets, bounded telemetry and abandoned-process reconciliation"
+next_objective = "Certify the OpenCode adapter with an owner-authorized real model call and spend/termination checks, then strengthen isolation and test-evidence reconciliation; keep GitHub writes and credential brokering separate"
 
 [implemented]
 cargo_workspace = true
 motherctl_cli = true
 strict_versioned_toml = true
 structured_errors_and_logging = true
-sqlite_migrations_v1_through_v8 = true
+sqlite_migrations_v1_through_v9 = true
 host_tracked_task_contracts = true
 explicit_task_state_machine = true
 immutable_task_checkpoints_and_transition_history = true
@@ -70,16 +70,22 @@ explicit_worktree_cleanup = true
 explicit_abandoned_process_reconciliation = true
 worker_process_lost_state = true
 worker_mcp_read_tools = true
+opencode_cli_provider_adapter = true
+provider_cost_step_and_timeout_budgets = true
+bounded_provider_telemetry = true
+provider_worktree_change_observation = true
+provider_repository_mutation_claim = "not_guaranteed"
+provider_credentials_host_managed = true
 
 [verification]
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 37
-process_integration_tests = 13
+unit_tests = 41
+process_integration_tests = 17
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
-commands = ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets --locked -- -D warnings", "cargo test --workspace --locked"]
+commands = ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets --locked -- -D warnings", "cargo test --workspace --locked", "cargo deny --locked check", "python3 scripts/check_public_tree.py"]
 coverage = [
   "Eight concurrent independent CLI writers share one runtime",
   "Project/context state and retry responses survive actual process kill/restart",
@@ -122,6 +128,12 @@ coverage = [
   "Running supervised processes block expiry requeue and retain expired evidence",
   "Owner-run mock process isolates its checkout, writes one artifact, and never completes the task",
   "Abandoned supervision marks the process lost, blocks the task, and permits explicit cleanup",
+  "Schema 8 preserves the execution graph while adding the opencode adapter",
+  "Fake OpenCode CLI process records bounded telemetry, worktree changes and artifact evidence without claiming project-repository mutation",
+  "Provider workspace-change metadata is trimmed to remain under the persisted size limit",
+  "Fake OpenCode CLI process is terminated when provider-reported cost exceeds the configured ceiling",
+  "Fake OpenCode CLI process is terminated when reported steps exceed the configured ceiling",
+  "An over-budget OpenCode process that exits before the next polling interval is still recorded as failed",
   "Expired leases recover assigned/running tasks and leases survive runtime restart",
   "MCP worker reads and the execution resource agree with CLI state",
 ]
@@ -149,18 +161,21 @@ verified = [
   "Dependency-aware worker leases, bounded scheduling, heartbeats, mock checkpoints and crash recovery",
   "Owner-run deterministic mock process supervision, isolated worktree checkout, bounded logs/evidence and explicit cleanup",
   "Schema 8 lost-process reconciliation survives a killed supervisor without signaling an unverified PID",
+  "Schema 9 preserves executions, events, workspaces and processes while permitting the opencode adapter",
+  "Owner-run OpenCode adapter uses documented JSON events, host login, isolated OpenCode config, explicit model/cost/step/timeout limits and bounded telemetry",
 ]
 incomplete = [
   "Handoff claims coordinate continuation but grant no execution ownership or lease",
   "Persona assertions are optional; same-UID clients may use the local-operator path",
   "Continuation snapshots omit persona, authorization and verified Git scopes",
-  "The owner-run supervisor covers only a fixed deterministic mock helper; provider calls, budgets, tests, sandbox isolation and independent evidence reconciliation remain unavailable",
+  "The owner-run supervisor supports a deterministic mock helper and an OpenCode CLI process, but real provider certification, sandbox isolation, independent spend metering, test execution and independent evidence reconciliation remain unavailable",
+  "Provider budgets rely on provider-reported events; underreported or delayed accounting can exceed the intended ceiling",
   "Abandoned-process reconciliation is explicit and depends on PID liveness heuristics; no automatic orphan reaper, PID-identity proof or cross-host recovery exists",
 ]
 not_implemented = [
   "Real-host Codex/Claude Code/Copilot certification",
   "Credential broker, real-account certification, repository/action scopes and GitHub writes",
-  "Provider-backed workers, resource budgets, sandbox isolation and GitHub review lifecycle",
+  "Real provider certification, independently metered budgets, sandbox isolation, test execution and GitHub review lifecycle",
   "Ratatui interface and human approval records",
 ]
 
@@ -168,7 +183,7 @@ not_implemented = [
 phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
 phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona change notification/refresh certification", "Per-operation typed result schemas beyond the response envelope"]
 phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling", "Handoff execution ownership/leases separate from readable history"]
-phase_7_execution = ["Provider-backed worker adapters and model budgets", "Sandbox isolation and cancellation across hosts", "Test execution and evidence reconciliation", "Automatic retry and independent review gates"]
+phase_7_execution = ["Real OpenCode provider certification and spend/termination checks", "Sandbox isolation and cancellation across hosts", "Test execution and evidence reconciliation", "Automatic retry and independent review gates"]
 later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Identity-safe Git operations and credential brokering", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
 
 [limitations]
@@ -177,8 +192,8 @@ context_trust = "Submitted summaries, objectives, labels, tests and references r
 task_completion = "Declared local file contract only; no test execution, independent review, human approval or general correctness verification"
 file_observations = "Point-in-time individual files, not an atomic filesystem snapshot or hostile same-UID sandbox"
 handoff_resume = "Local operator coordination claim only; no execution, authority grant, lease, or reassignment"
-worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises one fixed mock helper"
-worker_execution = "Deterministic mock process in an isolated Git worktree; no provider call, test execution, project-repository mutation, completion, sandbox or independent review"
+worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises the mock helper or OpenCode process"
+worker_execution = "Mock helper or OpenCode CLI process in an isolated Git worktree; provider tests use a fake executable, cost/step budgets are provider-reported, project-repository mutation is not verified for OpenCode, and no test execution, completion, sandbox or independent review exists"
 worker_recovery = "Explicit owner-run abandonment marks a stale running process lost; no signal is sent, PID liveness can be reused, and no automatic orphan reaper exists"
 snapshot_scopes = "Project, context, decisions, host-tracked tasks and latest checkpoints; persona/policy/verified Git scopes unavailable"
 secret_redaction = false
@@ -195,8 +210,10 @@ worker_supervision_scope = "owner_run_cli"
 worker_recovery_scope = "explicit_owner_cli"
 worktree_isolation = true
 worktree_isolation_scope = "checkout_only_not_sandbox"
-worker_adapter = "deterministic_mock_process_owner_run_cli"
-worker_project_repository_mutation = false
+worker_adapter = "mock_and_opencode_cli_owner_run"
+worker_project_repository_mutation = "mock_false_opencode_not_guaranteed"
+provider_credentials_brokered = false
+provider_spend_independently_metered = false
 scheduling_implemented = true
 leases_implemented = true
 worker_mcp_read_tools = true

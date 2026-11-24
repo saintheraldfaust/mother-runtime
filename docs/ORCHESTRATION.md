@@ -2,12 +2,13 @@
 
 Mother persists task contracts, dependency IDs, state transitions, checkpoints,
 narrowly scoped file evidence, durable worker execution leases, and owner-run
-supervised mock processes. A task without a lease reports `execution_mode:
-host_tracked` and null `worker_execution`; a leased task reports `worker_leased`
-plus its active execution. A `running` record still describes reported work, not
-proof of correctness or independent review. The only process adapter is a
-deterministic mock helper in an isolated worktree; it never edits the project
-repository or completes a task.
+supervised mock and OpenCode CLI processes. A task without a lease reports
+`execution_mode: host_tracked` and null `worker_execution`; a leased task reports
+`worker_leased` plus its active execution. A `running` record still describes
+reported work, not proof of correctness or independent review. The mock helper runs
+in an isolated worktree and never edits the project repository or completes a task.
+The OpenCode adapter can edit its worktree, but project-repository mutation is not
+verified and no process path completes a task automatically.
 
 ## Contracts and revisions
 
@@ -161,7 +162,7 @@ Snapshots also select up to 20 other unfinished tasks by latest project mutation
 with omission counts and the existing snapshot byte budget. Old packages remain
 unchanged even after a task completes; query live task state when continuing.
 
-## Worker execution leases and supervised mock runs
+## Worker execution leases and supervised runs
 
 A lease is durable coordination metadata, not a process or permission. It records
 an execution ID, task/project, worker label, attempt, lease duration, expiry,
@@ -200,36 +201,91 @@ reports `repository_mutation: false` and `completion: false`.
 
 ### Owner-run supervised process
 
-`workers run` is a separate CLI supervisor for one fixed deterministic helper. It
+`workers run` is a separate CLI supervisor for one selected execution adapter. It
 leases a ready task, resolves the registered repository's current Git commit, creates
 a detached worktree under `data/workers/<execution_id>/worktree`, records the base
-commit, launches `motherctl __mock-worker`, attaches its PID, heartbeats while it is
-alive, writes a bounded `worker.log`, and finalizes process evidence. The hidden
-helper is not a general command surface.
+commit, launches the adapter in its own process group, attaches its PID, heartbeats
+while it is alive, writes a bounded `worker.log`, and finalizes process evidence.
+
+The durable execution records the adapter selected at lease time. The default is
+`mock`; `--adapter opencode` selects the OpenCode CLI adapter.
 
 ```sh
 motherctl workers run --task TASK_ID --worker-label mock-a \
   --lease-seconds 120 --max-active 2 --timeout-seconds 60
+motherctl workers run --task TASK_ID --worker-label opencode-a \
+  --adapter opencode --model provider/model \
+  --max-cost-usd 1.00 --max-steps 20 \
+  --lease-seconds 120 --max-active 2 --timeout-seconds 300
 motherctl workers inspect --execution EXECUTION_ID
 motherctl workers cleanup --execution EXECUTION_ID
 ```
 
-The helper starts in its own process group with a cleared environment, a worktree
-`HOME`, Git terminal prompts disabled, and Git hooks/fsmonitor disabled for worktree
-operations. It checks that the supervisor is alive, optionally sleeps, and on success
-writes only `worker-output.txt` (0600) with `mock worker execution <execution_id>`.
+The mock helper starts with a cleared environment, a worktree `HOME`, Git terminal
+prompts disabled, and Git hooks/fsmonitor disabled for worktree operations. It checks
+that the supervisor is alive, optionally sleeps, and on success writes only
+`worker-output.txt` (0600) with `mock worker execution <execution_id>`.
+
 Standard output and error are captured up to 64 KiB each in `worker.log` (0600).
 Process records expose PID, status, exit code, log path, timestamps, and bounded
 acceptance-criterion observations from the worktree. They do not prove correctness,
 tests, independent review, or completion.
 
-A successful helper exit transitions a `running` task to `awaiting_input`; a failed
-or killed helper transitions it to `failed`. Neither path completes the task. If the
-lease expires while a process may still be running, recovery changes the task to
-`blocked` instead of requeueing it. Explicit release is rejected while a supervised
-process is running. The worktree is retained for inspection; `workers cleanup` only
-removes an inactive execution's worktree, prunes Git metadata, and marks the workspace
-removed. Cleanup does not delete the execution record, log, or evidence.
+#### OpenCode CLI adapter
+
+The OpenCode adapter invokes only:
+
+```text
+opencode run --format json --pure --auto \
+  --dir WORKTREE --model MODEL --title TITLE [--agent AGENT] PROMPT
+```
+
+`--model` and a positive `--max-cost-usd` are required. `--max-steps` is 1–200 and
+defaults to 20. The supervisor supplies a bounded prompt containing the task title,
+objective, source and acceptance criteria. The prompt is not authorization, and
+provider text is not evidence.
+
+The child receives an environment allowlist plus relevant `XDG_*` variables. Its
+OpenCode configuration lives in the private execution directory and project
+configuration is disabled. The host `HOME` and OpenCode data store are retained
+because 1.19.6 keeps login credentials there; provider sessions may therefore
+remain in host OpenCode storage. Mother does not copy, store or return provider
+tokens.
+`--pure` disables external plugins. `--auto` explicitly authorizes tool execution
+without interactive prompts. The installed 1.19.6 non-interactive path uses an
+in-process server, so no external OpenCode server is required.
+
+The supervisor parses newline-delimited JSON for the session ID, provider-reported
+cost, token counts, step and tool counts, retries, bounded errors and parse failures.
+Provider records store bounded accounting metadata, not model text or hidden
+reasoning; the bounded raw process log may still contain streamed model output.
+Cost is accumulated from `step_finish` events and checked while the process runs and
+after output completes. Budget exhaustion terminates the process group when needed;
+timeout and cost/step exhaustion mark the execution killed and a running task failed.
+`budget_reason` records `cost`, `steps`, `timeout` or `heartbeat_failed` when known.
+Cost is provider-reported, not independently metered; a provider that underreports or
+delays accounting can exceed the intended ceiling.
+
+Provider completion requires bounded JSON provider metadata. `repository_mutation`
+is `null` because Mother does not verify project-repository changes.
+`worktree_mutation` is derived from a bounded `git status` observation inside the
+worktree; up to 64 changed paths are recorded. Acceptance-criterion evidence is
+observed from the worktree before any transition.
+
+The adapter uses the owner's OS-user authority and may use network access, host
+OpenCode authentication, files outside the worktree, and arbitrary provider tools
+authorized by `--auto`. The worktree and isolated OpenCode configuration prevent
+checkout/config collisions, not hostile access. This is not a sandbox, credential
+broker, independent metering service or billing guarantee.
+
+A successful mock or provider exit transitions a `running` task to `awaiting_input`;
+a failed, killed or budget-exhausted process transitions it to `failed`. No path
+completes the task. If the lease expires while a process may still be running,
+recovery changes the task to `blocked` instead of requeueing it. Explicit release is
+rejected while a supervised process is running. The worktree is retained for
+inspection; `workers cleanup` only removes an inactive execution's worktree, prunes
+Git metadata, and marks the workspace removed. Cleanup does not delete the execution
+record, log, or evidence.
 
 Expiry recovery is explicit (`workers recover`) or occurs when reacquiring the same
 task. An expired execution is marked `expired`. An `assigned` task returns to
@@ -239,16 +295,16 @@ for operator reconciliation. Recovery preserves history and sets a new attempt o
 the next lease. Leases persist across runtime restarts.
 
 A lease is not an OS lock, sandbox, process supervisor, identity assertion, or write
-authorization. The owner-run CLI supervises the fixed mock helper; the runtime itself
+authorization. The owner-run CLI supervises the selected adapter; the runtime itself
 does not launch, signal or inspect arbitrary processes. A Git worktree prevents
 checkout collisions, not filesystem access: a same-UID process can still edit files
 outside it or submit task transitions, and Mother cannot detect work performed after
 expiry. Read worker state through MCP; lease, heartbeat, mock-run, process supervision,
 abandonment, cleanup, release and recovery mutations are CLI-only.
 
-If the supervisor itself is killed, the helper observes parent loss and exits, but
-its durable process row still says `running`. After confirming the recorded PID is
-gone, the owner can reconcile it:
+If the supervisor itself is killed, the adapter may exit, but its durable process row
+still says `running`. After confirming the recorded PID is gone, the owner can
+reconcile it:
 
 ```sh
 motherctl workers abandon --execution EXECUTION_ID
@@ -259,18 +315,23 @@ motherctl workers cleanup --execution EXECUTION_ID
 and blocks an assigned/running task. It never signals or kills the recorded PID.
 Without `--force`, it refuses while that PID still exists. Worktree cleanup remains
 a separate explicit step. Pre-process failures such as worktree preparation,
-workspace registration, helper spawn, or process attachment invoke the same
+workspace registration, provider spawn, or process attachment invoke the same
 best-effort abandonment so the task does not remain assigned. There is no automatic
 orphan reaper or cross-host process reconciliation. See
 [ADR 0006](DECISIONS/0006-worker-lease-boundary.md),
-[ADR 0007](DECISIONS/0007-worker-process-boundary.md) and
-[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md).
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md),
+[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md) and
+[ADR 0009](DECISIONS/0009-opencode-provider-adapter.md).
 
 ## Remaining execution work
 
-A provider-backed worker, sandbox, automatic retry, budget enforcement, credential
-broker, test runner, review verifier, and human-approval workflow remain
-unimplemented. The deterministic mock process proves scheduling, checkpointing,
-bounded concurrency, lease recovery, restart persistence, owner-run process
-supervision, worktree checkout isolation, bounded logs/evidence, and explicit
-cleanup only. GitHub writes and credential brokering remain separate boundaries.
+The mock and OpenCode adapters are implemented under the owner-run supervisor.
+Provider tests use a fake `opencode` executable; no real paid or authenticated model
+call has been certified. Sandbox isolation, independent spend metering, credential
+brokering, automatic retry, test execution, review verification, human approval and
+GitHub writes remain unimplemented. The deterministic mock process proves scheduling,
+checkpointing, bounded concurrency, lease recovery, restart persistence, owner-run
+process supervision, worktree checkout isolation, bounded logs/evidence and explicit
+cleanup. The OpenCode adapter adds adapter selection, bounded provider telemetry and
+cost/step/timeout cancellation, but not sandboxed or independently verified
+execution.

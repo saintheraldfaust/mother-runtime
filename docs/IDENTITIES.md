@@ -67,8 +67,10 @@ motherctl --data-dir /path/to/state github revoke \
 Revocation blocks future authorized use and records an immutable revision. It does
 not delete history, delete the isolated `gh` profile, or rewrite any GitHub data.
 To remove local credentials as well, the owner must run `gh auth logout` with that
-profile's `GH_CONFIG_DIR`. No provider worker process or credential handoff exists
-yet to pause or cancel. Re-running `github connect` with the same verified account
+profile's `GH_CONFIG_DIR`. No credential handoff to a provider worker exists; the
+OpenCode adapter uses the owner's separate host OpenCode login and does not receive
+GitHub identity credentials from Mother. There is no provider-worker credential
+grant to pause or cancel. Re-running `github connect` with the same verified account
 after owner reauthorization creates a later active revision; past revisions remain
 readable.
 

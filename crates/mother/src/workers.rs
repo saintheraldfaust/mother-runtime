@@ -64,11 +64,42 @@ impl WorkerReleaseOutcome {
     }
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    clap::ValueEnum,
+    Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerAdapter {
+    #[default]
+    Mock,
+    Opencode,
+}
+
+impl WorkerAdapter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mock => "mock",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerLeaseInput {
     pub task_id: String,
     pub worker_label: String,
+    /// Execution adapter. Real provider calls require an owner-configured OpenCode login.
+    #[serde(default)]
+    pub adapter: WorkerAdapter,
     /// Requested lease duration in seconds.
     #[schemars(range(min = 1, max = 3600))]
     pub lease_seconds: u32,
@@ -163,6 +194,9 @@ pub struct WorkerProcessFinishInput {
     pub expected_revision: u64,
     pub outcome: WorkerProcessOutcome,
     pub exit_code: Option<i32>,
+    /// Bounded provider telemetry recorded by the owner-run supervisor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

@@ -6,9 +6,10 @@ Run from the workspace root:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+cargo deny --locked check
 ```
 
-The suite contains 37 unit tests and thirteen process integration tests.
+The suite contains 41 unit tests and seventeen process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -34,7 +35,8 @@ Unit coverage:
   Schema 4→5 upgrade preserves personas and adds identity tables. Schema 5→6
   preserves identities and adds worker lease tables. Schema 6→7 preserves leases
   and adds workspace/process tables. Schema 7→8 preserves process records and
-  permits the explicit `lost` state.
+  permits the explicit `lost` state. Schema 8→9 preserves executions, events,
+  workspaces and processes while permitting the `opencode` adapter.
 - Worker eligibility excludes tasks with incomplete dependencies or an unexpired
   lease. One active lease per task and the global `max_active` bound are enforced.
 - Heartbeats extend leases and reject stale revisions. Expired leases are recovered
@@ -48,6 +50,10 @@ Unit coverage:
   allowing the process finish to preserve expired status and evidence.
 - Abandonment marks a running process `lost`, blocks its task, records an immutable
   event, permits explicit worktree cleanup, and also blocks pre-process failures.
+- Provider metadata is accepted only for an OpenCode execution, required at
+  completion, bounded to 32 KiB, and used for worktree mutation reporting without
+  claiming project-repository observation. Oversized workspace-change arrays are
+  trimmed before that limit.
 
 Process integration coverage:
 
@@ -67,6 +73,16 @@ Process integration coverage:
 - Kill the actual owner-run supervisor, wait for the helper to exit, then use
   `workers abandon` to mark the stale process `lost`, block the task, and remove the
   retained worktree through `workers cleanup`.
+- A fake `opencode` executable verifies the invoked flags and isolated-config
+  environment, emits documented JSON events and writes an artifact in the worktree.
+  The OpenCode adapter records session, cost, tokens, steps, tool calls, bounded
+  workspace changes and artifact evidence, leaves the project checkout untouched,
+  and does not claim project-repository mutation or completion.
+- A fake `opencode` executable reports cost over the requested ceiling and remains
+  running. The supervisor terminates its process group, records `budget_reason:
+  cost`, kills the execution and fails the task. A separate provider prompt is not
+  treated as completion evidence. A sibling case exceeds the step ceiling and
+  records `budget_reason: steps`.
 - Refuse to replace a regular file at the socket path and refuse insecure
   directory permissions. `doctor` reports missing state without initializing it.
 
@@ -140,9 +156,11 @@ Persona process coverage:
 Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
 macOS and Linux validation; no hosted CI run is claimed. No interactive
 coding-assistant host, coding provider, mandatory-persona authorization, real GitHub
-account login, GitHub write, credential broker, remote workflow, provider worker,
-sandbox isolation, worker-executed tests, performance target, power-loss, or hostile
-same-UID isolation test has been performed. Abandonment is explicit rather than an
-automatic reaper, and PID liveness/PID reuse cannot be certified. The supervised
-process test uses a deterministic local helper, not a model provider. GitHub identity coverage uses a
-fake `gh`; it is not certification with a real account.
+account login, GitHub write, credential broker, remote workflow, real provider call,
+provider certification, sandbox isolation, worker-executed tests, performance target,
+power-loss, or hostile same-UID isolation test has been performed. Abandonment is
+explicit rather than an automatic reaper, and PID liveness/PID reuse cannot be
+certified. Mock process coverage uses a deterministic local helper. OpenCode adapter
+coverage uses a fake `opencode` executable, not a model provider; no paid or
+authenticated provider call is claimed. GitHub identity coverage uses a fake `gh`; it
+is not certification with a real account.

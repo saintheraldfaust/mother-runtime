@@ -44,7 +44,8 @@ false positive, and `--force` deliberately bypasses the guard. Abandonment also 
 not prove that the helper stopped or that its work is valid.
 
 There is no automatic orphan reaper, cross-host ownership, signal delivery, evidence
-recalculation, or provider/budget integration. Those require stronger process
-identity, credential, and host-coordination controls. A future provider adapter must
-reuse this explicit reconciliation boundary rather than silently treating a stale
-process as successful or failed work.
+recalculation, or provider/budget integration at this boundary. Those require
+stronger process identity, credential, and host-coordination controls. A future
+provider adapter must reuse this explicit reconciliation boundary rather than
+silently treating a stale process as successful or failed work. ADR 0009 later adds
+the OpenCode adapter without weakening this explicit recovery rule.

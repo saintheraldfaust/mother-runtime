@@ -41,6 +41,7 @@ The current implementation includes:
 - Dependency-aware worker execution leases with heartbeat, bounded concurrency and crash recovery.
 - A deterministic mock worker adapter that records checkpoints without editing files or auto-completing work.
 - Owner-run supervised mock processes with isolated Git worktrees, bounded logs, artifact evidence, and explicit abandoned-supervisor reconciliation.
+- A first OpenCode CLI provider adapter under the same owner-run supervisor, using the owner's host login, with explicit model, cost, step and timeout limits, bounded telemetry, and worktree observations. It is exercised with a fake `opencode` executable; no real paid model call is claimed.
 - Runtime file evidence.
 - Revision checks and idempotent writes.
 - Runtime diagnostics.
@@ -48,7 +49,7 @@ The current implementation includes:
 - Read-only verified GitHub identity records with isolated CLI profiles, persona binding, revocation, and no stored tokens.
 - An MCP stdio bridge implemented using the official Rust SDK.
 
-Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; no real account or coding-assistant host has yet been certified.
+Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; the OpenCode provider adapter uses a fake `opencode` executable. No real GitHub account, paid coding-provider call or coding-assistant host has yet been certified.
 
 Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
 
@@ -62,7 +63,7 @@ Mother's next engineering milestones include:
 
 **GitHub identities:** Expand read-only verified account records into repository/action scopes, a credential broker, write authorization, and reconciliation without exposing tokens to agents.
 
-**Independent workers:** Expand the verified lease scheduler, mock process supervisor and worktree boundary into provider adapters with budgets, tests and evidence reconciliation.
+**Independent workers:** Expand the first OpenCode CLI adapter and verified worktree boundary into certified provider workflows, stronger isolation, test execution and independent evidence reconciliation.
 
 **Governed engineering workflows:** Assignment, implementation, validation, independent review, and human-controlled merging through GitHub.
 
@@ -82,7 +83,7 @@ Mother's next engineering milestones include:
 
 Mother Runtime is under active development and is not yet a production-ready autonomous engineering orchestrator.
 
-The current foundation should not be interpreted as proof that provider-backed independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available.
+The current foundation should not be interpreted as proof that certified provider-backed independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available. The OpenCode adapter is implemented but has not been certified with a real model call.
 
 See the development status, architecture, security documentation, and roadmap for verified capabilities and ongoing work.
 

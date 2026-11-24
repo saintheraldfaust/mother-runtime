@@ -29,6 +29,22 @@ fn success(dir: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&result.stdout).unwrap()
 }
 
+fn success_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Value {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_motherctl"));
+    command.arg("--data-dir").arg(dir).arg("--json").args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "args={args:?}, stdout={}, stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    serde_json::from_slice(&result.stdout).unwrap()
+}
+
 struct Runtime {
     child: Child,
     dir: PathBuf,
@@ -1600,6 +1616,324 @@ async fn abandoned_supervisor_can_be_reconciled_and_cleaned_up() {
     })
     .await
     .expect("abandoned supervisor scenario timed out");
+}
+
+fn provider_script(temp: &Path, cost: f64, delay_seconds: u32, steps: u32) -> PathBuf {
+    let path = temp.join("opencode");
+    let script = format!(
+        r#"#!/bin/sh
+[ -d "$OPENCODE_CONFIG_DIR" ] || exit 10
+[ "$OPENCODE_DISABLE_PROJECT_CONFIG" = "1" ] || exit 11
+[ "$OPENCODE_DISABLE_AUTOUPDATE" = "1" ] || exit 12
+[ "$HOME" != "$PWD" ] || exit 13
+has_format=
+has_pure=
+has_auto=
+has_model=
+has_dir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --standalone) exit 9 ;;
+    --format) [ "$2" = "json" ] || exit 14; has_format=1; shift 2 ;;
+    --pure) has_pure=1; shift ;;
+    --auto) has_auto=1; shift ;;
+    --model) [ "$2" = "test/model" ] || exit 15; has_model=1; shift 2 ;;
+    --dir) [ -d "$2" ] || exit 16; has_dir=1; shift 2 ;;
+    --title|--agent) shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$has_format$has_pure$has_auto$has_model$has_dir" = "11111" ] || exit 17
+printf '%s\n' '{{"type":"step_start","sessionID":"ses-test","part":{{"type":"step-start"}}}}'
+printf 'provider output\n' > worker-output.txt
+printf '%s\n' '{{"type":"tool_use","sessionID":"ses-test","part":{{"tool":"bash","state":{{"status":"completed"}}}}}}'
+step=0
+while [ "$step" -lt {steps} ]; do
+  printf '%s\n' '{{"type":"step_finish","sessionID":"ses-test","part":{{"cost":{cost},"tokens":{{"input":100,"output":20,"reasoning":0,"cache":{{"read":0,"write":0}}}}}}}}'
+  step=$((step + 1))
+done
+sleep {delay_seconds}
+printf '%s\n' '{{"type":"text","sessionID":"ses-test","part":{{"text":"provider finished"}}}}'
+"#
+    );
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+#[tokio::test]
+async fn supervised_opencode_process_records_bounded_provider_telemetry() {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let temp = directory();
+        let dir = temp.path().join("data");
+        success(&dir, &["init"]);
+        let mut runtime = Runtime::start(&dir);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_repository(&repo);
+        let project = success(
+            &dir,
+            &[
+                "projects",
+                "attach",
+                "--name",
+                "Provider workers",
+                "--repository",
+                repo.to_str().unwrap(),
+            ],
+        );
+        let project_id = project["result"]["id"].as_str().unwrap();
+        let task_id = create_ready_task(&dir, temp.path(), project_id, "Provider work");
+        let opencode = provider_script(temp.path(), 0.0125, 0, 1);
+        let run = success_with_env(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                &task_id,
+                "--worker-label",
+                "opencode-a",
+                "--adapter",
+                "opencode",
+                "--model",
+                "test/model",
+                "--max-cost-usd",
+                "1.0",
+                "--max-steps",
+                "5",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+            ],
+            &[("MOTHER_OPENCODE_BIN", opencode.to_str().unwrap())],
+        );
+        let execution = &run["result"];
+        assert_eq!(execution["adapter"], "opencode");
+        assert_eq!(execution["status"], "released");
+        assert_eq!(execution["process"]["status"], "exited");
+        assert_eq!(execution["process"]["evidence"][0]["status"], "present");
+        assert_eq!(execution["task_state"], "awaiting_input");
+        assert_eq!(execution["repository_mutation"], Value::Null);
+        assert_eq!(execution["worktree_mutation"], true);
+        let provider = &execution["result"]["provider"];
+        assert_eq!(provider["session_id"], "ses-test");
+        assert_eq!(provider["model"], "test/model");
+        assert_eq!(provider["cost_usd"], 0.0125);
+        assert_eq!(provider["tokens"]["input"], 100);
+        assert_eq!(provider["tokens"]["output"], 20);
+        assert_eq!(provider["steps"], 1);
+        assert_eq!(provider["tool_calls"], 1);
+        assert_eq!(provider["budget_exceeded"], false);
+        assert!(
+            provider["workspace_changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|change| change["path"] == "worker-output.txt")
+        );
+        let worktree = PathBuf::from(execution["workspace"]["path"].as_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("worker-output.txt")).unwrap(),
+            "provider output\n"
+        );
+        assert!(!repo.join("worker-output.txt").exists());
+        runtime.stop();
+    })
+    .await
+    .expect("provider scenario timed out");
+}
+
+#[tokio::test]
+async fn supervised_opencode_process_stops_when_cost_budget_is_exceeded() {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let temp = directory();
+        let dir = temp.path().join("data");
+        success(&dir, &["init"]);
+        let mut runtime = Runtime::start(&dir);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_repository(&repo);
+        let project = success(
+            &dir,
+            &[
+                "projects",
+                "attach",
+                "--name",
+                "Budget workers",
+                "--repository",
+                repo.to_str().unwrap(),
+            ],
+        );
+        let project_id = project["result"]["id"].as_str().unwrap();
+        let task_id = create_ready_task(&dir, temp.path(), project_id, "Budget work");
+        let opencode = provider_script(temp.path(), 2.0, 5, 1);
+        let run = success_with_env(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                &task_id,
+                "--worker-label",
+                "opencode-budget",
+                "--adapter",
+                "opencode",
+                "--model",
+                "test/model",
+                "--max-cost-usd",
+                "0.5",
+                "--max-steps",
+                "5",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+            ],
+            &[("MOTHER_OPENCODE_BIN", opencode.to_str().unwrap())],
+        );
+        let execution = &run["result"];
+        assert_eq!(execution["adapter"], "opencode");
+        assert_eq!(execution["status"], "failed");
+        assert_eq!(execution["process"]["status"], "killed");
+        assert_eq!(execution["task_state"], "failed");
+        assert_eq!(execution["result"]["provider"]["budget_exceeded"], true);
+        assert_eq!(execution["result"]["provider"]["budget_reason"], "cost");
+        assert_eq!(execution["result"]["provider"]["cost_usd"], 2.0);
+        runtime.stop();
+    })
+    .await
+    .expect("provider budget scenario timed out");
+}
+
+#[tokio::test]
+async fn supervised_opencode_process_stops_when_step_budget_is_exceeded() {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let temp = directory();
+        let dir = temp.path().join("data");
+        success(&dir, &["init"]);
+        let mut runtime = Runtime::start(&dir);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_repository(&repo);
+        let project = success(
+            &dir,
+            &[
+                "projects",
+                "attach",
+                "--name",
+                "Step budget workers",
+                "--repository",
+                repo.to_str().unwrap(),
+            ],
+        );
+        let project_id = project["result"]["id"].as_str().unwrap();
+        let task_id = create_ready_task(&dir, temp.path(), project_id, "Step budget work");
+        let opencode = provider_script(temp.path(), 0.01, 5, 3);
+        let run = success_with_env(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                &task_id,
+                "--worker-label",
+                "opencode-step-budget",
+                "--adapter",
+                "opencode",
+                "--model",
+                "test/model",
+                "--max-cost-usd",
+                "1.0",
+                "--max-steps",
+                "1",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+            ],
+            &[("MOTHER_OPENCODE_BIN", opencode.to_str().unwrap())],
+        );
+        let execution = &run["result"];
+        assert_eq!(execution["status"], "failed");
+        assert_eq!(execution["process"]["status"], "killed");
+        assert_eq!(execution["task_state"], "failed");
+        assert_eq!(execution["result"]["provider"]["budget_exceeded"], true);
+        assert_eq!(execution["result"]["provider"]["budget_reason"], "steps");
+        assert_eq!(execution["result"]["provider"]["steps"], 3);
+        runtime.stop();
+    })
+    .await
+    .expect("step budget scenario timed out");
+}
+
+#[tokio::test]
+async fn supervised_opencode_process_rejects_instant_over_budget_completion() {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let temp = directory();
+        let dir = temp.path().join("data");
+        success(&dir, &["init"]);
+        let mut runtime = Runtime::start(&dir);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_repository(&repo);
+        let project = success(
+            &dir,
+            &[
+                "projects",
+                "attach",
+                "--name",
+                "Instant budget workers",
+                "--repository",
+                repo.to_str().unwrap(),
+            ],
+        );
+        let project_id = project["result"]["id"].as_str().unwrap();
+        let task_id = create_ready_task(&dir, temp.path(), project_id, "Instant budget work");
+        let opencode = provider_script(temp.path(), 3.0, 0, 1);
+        let run = success_with_env(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--task",
+                &task_id,
+                "--worker-label",
+                "opencode-instant-budget",
+                "--adapter",
+                "opencode",
+                "--model",
+                "test/model",
+                "--max-cost-usd",
+                "0.5",
+                "--max-steps",
+                "5",
+                "--lease-seconds",
+                "5",
+                "--max-active",
+                "1",
+                "--timeout-seconds",
+                "10",
+            ],
+            &[("MOTHER_OPENCODE_BIN", opencode.to_str().unwrap())],
+        );
+        let execution = &run["result"];
+        assert_eq!(execution["status"], "failed");
+        assert_eq!(execution["process"]["status"], "killed");
+        assert_eq!(execution["task_state"], "failed");
+        assert_eq!(execution["result"]["provider"]["budget_exceeded"], true);
+        assert_eq!(execution["result"]["provider"]["budget_reason"], "cost");
+        runtime.stop();
+    })
+    .await
+    .expect("instant provider budget scenario timed out");
 }
 
 #[tokio::test]

@@ -34,11 +34,11 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `workers list [--task ID] [--project ID] [--status STATUS] [--after N] [--limit N]` | Page through worker execution leases. |
 | `workers inspect --execution ID` | Read one lease, task state, expiry and coordination-only limits. |
 | `workers history --execution ID [--after N] [--limit N]` | Retrieve immutable lease, heartbeat, mock-checkpoint, release and expiry events. |
-| `workers lease --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease; no process is launched. |
+| `workers lease --task ID --worker-label LABEL [--adapter mock\|opencode] [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease with a durable adapter selection; no process is launched. |
 | `workers heartbeat --execution ID --expected-revision N [--lease-seconds N]` | Extend an active lease from the current time. |
 | `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
 | `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state; a running supervised process blocks release. |
-| `workers run --task ID --worker-label LABEL [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, run the deterministic mock helper under supervision, and finalize evidence. |
+| `workers run --task ID --worker-label LABEL [--adapter mock\|opencode] [--model PROVIDER/MODEL] [--agent NAME] [--max-cost-usd N] [--max-steps N] [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, supervise the selected mock helper or OpenCode CLI process, and finalize evidence. The OpenCode adapter requires `--model` and positive `--max-cost-usd`. |
 | `workers abandon --execution ID [--force]` | Reconcile a crashed supervisor: mark a running process `lost`, block its task, and leave the worktree for explicit cleanup. Refuses while the recorded PID exists unless forced. |
 | `workers cleanup --execution ID` | Remove a retained non-active worktree, prune Git metadata, and mark the workspace removed. |
 | `workers recover` | Expire overdue leases; a task with a running supervised process becomes blocked instead of requeued. |
@@ -105,11 +105,22 @@ identity. No token is stored or returned. See [GitHub identities](IDENTITIES.md)
 
 Worker leases default to 120 seconds and four active leases. Leases coordinate
 owner-run runners inside Mother's database; they are not OS locks, identity proof or
-write authorization. `workers run` is a separate owner-run supervisor for a fixed
-deterministic helper in an isolated Git worktree; it is not a sandbox or provider
-adapter. `workers mock` records a checkpoint without launching a process. If a
-supervisor is killed, `workers abandon` marks the process `lost` without signaling an
-unverified PID; use `--force` only after confirming the recorded PID is gone or
-belongs to the abandoned helper. Retained worktrees require explicit
-`workers cleanup`. See
+write authorization. `workers run` is a separate owner-run supervisor for the mock
+helper or an OpenCode CLI process in an isolated Git worktree. It is not a sandbox.
+
+For `--adapter opencode`, `--model` and a positive `--max-cost-usd` are required;
+`--max-steps` defaults to 20 and `--timeout-seconds` to 300. `--helper-delay-ms` and
+`--helper-exit-code` are mock-only. The child uses the
+owner's existing OpenCode login, an isolated OpenCode configuration inside the
+execution directory, `--pure --auto`, and an environment allowlist. Mother does not
+store or return provider credentials. Cost accounting is provider-reported and is
+not an independent billing guarantee. A successful run still requires host review;
+budget exhaustion, timeout or failure marks the task failed. See
+[provider boundary](ORCHESTRATION.md#opencode-cli-adapter) and
+[ADR 0009](DECISIONS/0009-opencode-provider-adapter.md).
+
+`workers mock` records a checkpoint without launching a process. If a supervisor is
+killed, `workers abandon` marks the process `lost` without signaling an unverified
+PID; use `--force` only after confirming the recorded PID is gone or belongs to the
+abandoned helper. Retained worktrees require explicit `workers cleanup`. See
 [worker operations](ORCHESTRATION.md#worker-execution-leases).

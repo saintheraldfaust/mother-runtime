@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 mod continuity;
 mod github;
 mod personas;
@@ -63,6 +63,10 @@ impl Store {
             if version < 8 {
                 transaction
                     .execute_batch(include_str!("../migrations/008_worker_process_loss.sql"))?;
+            }
+            if version < 9 {
+                transaction
+                    .execute_batch(include_str!("../migrations/009_provider_adapter.sql"))?;
             }
             transaction.commit()?;
         }
@@ -185,7 +189,7 @@ fn apply(tx: &Transaction<'_>, request: &Request, dir: Option<&Path>) -> Result<
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"deterministic_mock_process", "worker_process_supervision":true, "worker_supervision_scope":"owner_run_cli", "worker_worktree_isolation":true, "worker_project_repository_mutation":false, "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"mock_and_opencode_cli", "provider_workers_supported":true, "provider_credentials_stored":false, "provider_credentials_brokered":false, "provider_budget_enforcement":true, "provider_budget_basis":"provider_reported_cost_and_steps", "provider_spend_independently_metered":false, "worker_process_supervision":true, "worker_supervision_scope":"owner_run_cli", "worker_worktree_isolation":true, "worker_project_repository_mutation":"not_guaranteed", "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -977,7 +981,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 8);
+        assert_eq!(health["schema_version"], 9);
         assert_eq!(health["execution_leases_supported"], true);
         assert_eq!(health["personas_supported"], true);
         assert_eq!(health["github_identity_records_supported"], true);
@@ -1038,7 +1042,7 @@ mod tests {
         let mut store = Store::open(dir.path()).unwrap();
         assert_eq!(
             store.execute(&request(Operation::Health)).unwrap()["schema_version"],
-            8
+            9
         );
         let persona = store
             .execute(&request(Operation::PersonaGet {
@@ -1075,7 +1079,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 8);
+        assert_eq!(health["schema_version"], 9);
         let execution = store
             .execute(&request(Operation::WorkerExecutionGet {
                 execution_id: "execution".into(),
@@ -1107,7 +1111,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 8);
+        assert_eq!(health["schema_version"], 9);
         let execution = store
             .execute(&request(Operation::WorkerExecutionGet {
                 execution_id: "execution".into(),
@@ -1127,6 +1131,69 @@ mod tests {
     }
 
     #[test]
+    fn schema_eight_upgrade_preserves_execution_graph_and_adds_opencode_adapter() {
+        let (dir, _lock, connection) = legacy_database();
+        for migration in [
+            include_str!("../migrations/002_continuity.sql"),
+            include_str!("../migrations/003_tasks.sql"),
+            include_str!("../migrations/004_personas.sql"),
+            include_str!("../migrations/005_github_identities.sql"),
+            include_str!("../migrations/006_worker_leases.sql"),
+            include_str!("../migrations/007_worker_processes.sql"),
+            include_str!("../migrations/008_worker_process_loss.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection.execute("INSERT INTO projects(id,name,repository,revision) VALUES('legacy','legacy','/legacy',3)",[]).unwrap();
+        connection.execute("INSERT INTO tasks(id,project_id,title,objective,source,acceptance_criteria,review_required,state,owner_label,revision,project_revision) VALUES('task','legacy','Provider task','Preserve graph','old-client','[{\"path\":\"artifact\"}]',0,'ready','worker-a',1,3)",[]).unwrap();
+        connection.execute("INSERT INTO worker_executions(id,task_id,project_id,worker_label,adapter,status,revision,attempt,lease_seconds,lease_expires_at,heartbeat_at,result) VALUES('execution','task','legacy','worker-a','mock','released',4,1,120,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z','{\"ok\":true}')",[]).unwrap();
+        connection.execute("INSERT INTO worker_execution_events(id,execution_id,action,revision,details) VALUES('event','execution','released',4,'{\"source\":\"legacy\"}')",[]).unwrap();
+        connection.execute("INSERT INTO worker_workspaces(id,execution_id,path,base_commit,status) VALUES('workspace','execution','/legacy/worktree','abc','ready')",[]).unwrap();
+        connection.execute("INSERT INTO worker_processes(id,execution_id,pid,status,exit_code,log_path,evidence) VALUES('process','execution',42,'exited',0,'/legacy/worker.log','{\"legacy\":true}')",[]).unwrap();
+        drop(connection);
+        let mut store = Store::open(dir.path()).unwrap();
+        let health = store.execute(&request(Operation::Health)).unwrap();
+        assert_eq!(health["schema_version"], 9);
+        assert_eq!(health["worker_adapter"], "mock_and_opencode_cli");
+        assert_eq!(health["provider_workers_supported"], true);
+        assert_eq!(health["provider_credentials_stored"], false);
+        assert_eq!(health["provider_credentials_brokered"], false);
+        assert_eq!(
+            health["provider_budget_basis"],
+            "provider_reported_cost_and_steps"
+        );
+        assert_eq!(health["provider_spend_independently_metered"], false);
+        assert_eq!(
+            health["worker_project_repository_mutation"],
+            "not_guaranteed"
+        );
+        let execution = store
+            .execute(&request(Operation::WorkerExecutionGet {
+                execution_id: "execution".into(),
+            }))
+            .unwrap();
+        assert_eq!(execution["adapter"], "mock");
+        assert_eq!(execution["result"], json!({"ok": true}));
+        assert_eq!(execution["workspace"]["path"], "/legacy/worktree");
+        assert_eq!(execution["process"]["status"], "exited");
+        assert_eq!(execution["process"]["evidence"], json!({"legacy": true}));
+        let leased = store
+            .execute(&request(Operation::WorkerLease(
+                crate::workers::WorkerLeaseInput {
+                    task_id: "task".into(),
+                    worker_label: "worker-b".into(),
+                    adapter: crate::workers::WorkerAdapter::Opencode,
+                    lease_seconds: 120,
+                    max_active: 1,
+                    expected_task_revision: None,
+                    expected_project_revision: None,
+                },
+            )))
+            .unwrap();
+        assert_eq!(leased["adapter"], "opencode");
+    }
+
+    #[test]
     fn schema_five_upgrade_preserves_identities_and_adds_worker_leases() {
         let (dir, _lock, connection) = legacy_database();
         for migration in [
@@ -1143,7 +1210,7 @@ mod tests {
         drop(connection);
         let mut store = Store::open(dir.path()).unwrap();
         let health = store.execute(&request(Operation::Health)).unwrap();
-        assert_eq!(health["schema_version"], 8);
+        assert_eq!(health["schema_version"], 9);
         assert_eq!(health["workers_supported"], true);
         assert_eq!(health["worker_process_supervision"], true);
         assert_eq!(health["worker_worktree_isolation"], true);

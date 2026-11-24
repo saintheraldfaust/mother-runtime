@@ -4,10 +4,10 @@ use crate::{
     protocol::Request,
     tasks::{CheckpointInput, TaskState, TaskTransition},
     workers::{
-        WorkerAbandonInput, WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput,
-        WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
-        WorkerReleaseInput, WorkerReleaseOutcome, WorkerWorkspaceCleanupInput,
-        WorkerWorkspaceInput,
+        WorkerAbandonInput, WorkerAdapter, WorkerExecutionStatus, WorkerHeartbeatInput,
+        WorkerLeaseInput, WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput,
+        WorkerProcessOutcome, WorkerReleaseInput, WorkerReleaseOutcome,
+        WorkerWorkspaceCleanupInput, WorkerWorkspaceInput,
     },
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -52,20 +52,44 @@ fn execution_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         }),
         None => Value::Null,
     };
+    let adapter = r.get::<_, String>(5)?;
+    let result = r
+        .get::<_, Option<String>>(12)?
+        .map(parsed_json)
+        .transpose()?;
+    let mock = adapter == "mock";
+    let repository_mutation = if mock {
+        json!(false)
+    } else {
+        result
+            .as_ref()
+            .and_then(|value| value.get("repository_mutation"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let worktree_mutation = if mock {
+        json!(pid.is_some())
+    } else {
+        result
+            .as_ref()
+            .and_then(|value| value.get("worktree_mutation"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
     Ok(json!({
         "sequence":r.get::<_,i64>(0)?,
         "id":r.get::<_,String>(1)?,
         "task_id":r.get::<_,String>(2)?,
         "project_id":r.get::<_,String>(3)?,
         "worker_label":r.get::<_,String>(4)?,
-        "adapter":r.get::<_,String>(5)?,
+        "adapter":adapter,
         "status":status,
         "revision":r.get::<_,i64>(7)?,
         "attempt":r.get::<_,i64>(8)?,
         "lease_seconds":r.get::<_,i64>(9)?,
         "lease_expires_at":r.get::<_,String>(10)?,
         "heartbeat_at":r.get::<_,String>(11)?,
-        "result":r.get::<_,Option<String>>(12)?.map(parsed_json).transpose()?,
+        "result":result,
         "created_at":r.get::<_,String>(13)?,
         "updated_at":r.get::<_,String>(14)?,
         "task_state":r.get::<_,String>(15)?,
@@ -78,8 +102,8 @@ fn execution_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "workspace":workspace,
         "process":process,
         "process_supervised":pid.is_some(),
-        "repository_mutation":false,
-        "worktree_mutation":pid.is_some()
+        "repository_mutation":repository_mutation,
+        "worktree_mutation":worktree_mutation
     }))
 }
 
@@ -395,12 +419,13 @@ pub(super) fn lease(
     )?;
     let id = Uuid::new_v4().to_string();
     tx.execute(
-        "INSERT INTO worker_executions(id,task_id,project_id,worker_label,adapter,status,revision,attempt,lease_seconds,lease_expires_at,heartbeat_at) VALUES(?1,?2,?3,?4,'mock','leased',1,?5,?6,strftime('%Y-%m-%dT%H:%M:%fZ','now',?7),strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        "INSERT INTO worker_executions(id,task_id,project_id,worker_label,adapter,status,revision,attempt,lease_seconds,lease_expires_at,heartbeat_at) VALUES(?1,?2,?3,?4,?5,'leased',1,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now',?8),strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             id,
             input.task_id,
             project,
             input.worker_label,
+            input.adapter.as_str(),
             attempt,
             input.lease_seconds,
             expire_modifier(input.lease_seconds)
@@ -412,7 +437,7 @@ pub(super) fn lease(
         request,
         &value,
         "worker.leased",
-        json!({"task_revision":assigned["task_revision"],"project_revision":assigned["project_revision"]}),
+        json!({"task_revision":assigned["task_revision"],"project_revision":assigned["project_revision"],"adapter":input.adapter.as_str()}),
     )?;
     execution(tx, &id)
 }
@@ -458,9 +483,9 @@ pub(super) fn run_mock(
 ) -> Result<Value> {
     validate_seconds(input.lease_seconds)?;
     let value = execution(tx, &input.execution_id)?;
-    if value["adapter"] != "mock" {
+    if value["adapter"] != WorkerAdapter::Mock.as_str() {
         return Err(Error::Conflict(
-            "only the deterministic mock adapter is implemented".into(),
+            "the checkpoint mock operation requires the mock adapter".into(),
         ));
     }
     if !matches!(value["status"].as_str(), Some("leased" | "running")) {
@@ -735,15 +760,27 @@ pub(super) fn process_attach(
         ));
     }
     require_process_owner(&value)?;
+    let adapter = value["adapter"].as_str().unwrap_or("mock").to_owned();
     let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
+    let (source, reason) = if adapter == WorkerAdapter::Opencode.as_str() {
+        (
+            "provider-process",
+            "owner-run supervisor attached an OpenCode provider process",
+        )
+    } else {
+        (
+            "mock-process",
+            "owner-run supervisor attached a deterministic mock process",
+        )
+    };
     tasks::transition(
         tx,
         request,
         &TaskTransition {
             task_id: task["id"].as_str().unwrap().into(),
             state: TaskState::Running,
-            source: "mock-process".into(),
-            reason: "owner-run supervisor attached a deterministic mock process".into(),
+            source: source.into(),
+            reason: reason.into(),
             owner_label: None,
             persona: None,
             expected_task_revision: task["task_revision"].as_u64().unwrap(),
@@ -775,7 +812,7 @@ pub(super) fn process_attach(
         request,
         &value,
         "worker.process_attached",
-        json!({"pid":input.pid,"log_path":log_path,"process_supervised":"owner_run_cli"}),
+        json!({"pid":input.pid,"log_path":log_path,"process_supervised":"owner_run_cli","adapter":adapter}),
     )?;
     execution(tx, &input.execution_id)
 }
@@ -810,23 +847,54 @@ pub(super) fn process_finish(
             "worker workspace no longer matches the recorded path".into(),
         ));
     }
+    let adapter = value["adapter"].as_str().unwrap_or("mock").to_owned();
+    let provider = input.provider.clone().unwrap_or(Value::Null);
+    if let Some(provider) = &input.provider {
+        if !provider.is_object() {
+            return Err(Error::Invalid(
+                "provider metadata must be a JSON object".into(),
+            ));
+        }
+        if serde_json::to_vec(provider)?.len() > 32 * 1024 {
+            return Err(Error::Invalid(
+                "provider metadata must be at most 32768 bytes".into(),
+            ));
+        }
+    }
+    if adapter == WorkerAdapter::Mock.as_str() && input.provider.is_some() {
+        return Err(Error::Invalid(
+            "mock process completion must not include provider metadata".into(),
+        ));
+    }
+    if adapter == WorkerAdapter::Opencode.as_str() && input.provider.is_none() {
+        return Err(Error::Invalid(
+            "opencode process completion requires provider metadata".into(),
+        ));
+    }
     let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
     let criteria: Vec<crate::tasks::ArtifactCriterion> =
         serde_json::from_value(task["acceptance_criteria"].clone())?;
     let evidence = crate::evidence::observe(&current, &criteria);
     let succeeded =
         input.outcome == WorkerProcessOutcome::Exited && input.exit_code.unwrap_or(0) == 0;
+    let (source, success_reason, failure_reason) = if adapter == WorkerAdapter::Opencode.as_str() {
+        (
+            "provider-process",
+            "OpenCode process exited successfully; host review is required before validation",
+            "OpenCode process did not exit successfully; triage before retry",
+        )
+    } else {
+        (
+            "mock-process",
+            "mock process exited successfully; host review is required before validation",
+            "mock process did not exit successfully; triage before retry",
+        )
+    };
     if value["task_state"] == "running" {
         let (state, reason) = if succeeded {
-            (
-                TaskState::AwaitingInput,
-                "mock process exited successfully; host review is required before validation",
-            )
+            (TaskState::AwaitingInput, success_reason)
         } else {
-            (
-                TaskState::Failed,
-                "mock process did not exit successfully; triage before retry",
-            )
+            (TaskState::Failed, failure_reason)
         };
         tasks::transition(
             tx,
@@ -834,7 +902,7 @@ pub(super) fn process_finish(
             &TaskTransition {
                 task_id: task["id"].as_str().unwrap().into(),
                 state,
-                source: "mock-process".into(),
+                source: source.into(),
                 reason: reason.into(),
                 owner_label: None,
                 persona: None,
@@ -852,12 +920,27 @@ pub(super) fn process_finish(
             input.execution_id
         ],
     )?;
+    let repository_mutation = if adapter == WorkerAdapter::Mock.as_str() {
+        json!(false)
+    } else {
+        Value::Null
+    };
+    let worktree_mutation = if adapter == WorkerAdapter::Mock.as_str() {
+        json!(true)
+    } else {
+        provider
+            .get("worktree_mutation")
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
     let result = json!({
+        "adapter":adapter,
         "outcome":input.outcome.as_str(),
         "exit_code":input.exit_code,
         "evidence":evidence,
-        "repository_mutation":false,
-        "worktree_mutation":true,
+        "provider":provider,
+        "repository_mutation":repository_mutation,
+        "worktree_mutation":worktree_mutation,
         "completion":false
     });
     let next_status = if value["expired"] == true {
@@ -881,7 +964,7 @@ pub(super) fn process_finish(
         request,
         &value,
         "worker.process_finished",
-        json!({"outcome":input.outcome.as_str(),"exit_code":input.exit_code,"evidence":evidence,"repository_mutation":false,"completion":false}),
+        json!({"adapter":adapter,"outcome":input.outcome.as_str(),"exit_code":input.exit_code,"evidence":evidence,"provider_session_id":provider.get("session_id"),"budget_exceeded":provider.get("budget_exceeded"),"repository_mutation":repository_mutation,"completion":false}),
     )?;
     execution(tx, &input.execution_id)
 }
@@ -1060,7 +1143,7 @@ pub(super) fn eligible(tx: &Transaction<'_>, project: Option<&str>, limit: u32) 
         "count":items.len(),
         "project_id":project,
         "selection":"ready_with_completed_dependencies_and_no_unexpired_lease",
-        "worker_adapter":"mock_lease_only",
+        "worker_adapter":"mock_or_opencode_lease",
         "bounded":true
     }))
 }
@@ -1216,6 +1299,7 @@ mod tests {
         WorkerLeaseInput {
             task_id: task["id"].as_str().unwrap().into(),
             worker_label: label.into(),
+            adapter: WorkerAdapter::Mock,
             lease_seconds: seconds,
             max_active,
             expected_task_revision: None,
@@ -1494,6 +1578,7 @@ mod tests {
                     expected_revision: 3,
                     outcome: WorkerProcessOutcome::Exited,
                     exit_code: Some(0),
+                    provider: None,
                 },
             )))
             .unwrap();
@@ -1579,6 +1664,7 @@ mod tests {
                     expected_revision: 4,
                     outcome: WorkerProcessOutcome::Killed,
                     exit_code: None,
+                    provider: None,
                 },
             )))
             .unwrap();

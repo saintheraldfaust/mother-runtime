@@ -8,13 +8,13 @@ use mother_runtime::{
     mcp,
     personas::{PersonaClaim, PersonaInput, PersonaStatus, PersonaStatusChange, PersonaUpdate},
     protocol::{ContextKind, Operation, PROTOCOL_VERSION, Request},
-    runtime,
+    provider, runtime,
     tasks::{CheckpointInput, TaskInput, TaskState, TaskTransition},
     workers::{
-        WorkerAbandonInput, WorkerExecutionStatus, WorkerHeartbeatInput, WorkerLeaseInput,
-        WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput, WorkerProcessOutcome,
-        WorkerReleaseInput, WorkerReleaseOutcome, WorkerWorkspaceCleanupInput,
-        WorkerWorkspaceInput,
+        WorkerAbandonInput, WorkerAdapter, WorkerExecutionStatus, WorkerHeartbeatInput,
+        WorkerLeaseInput, WorkerMockInput, WorkerProcessAttachInput, WorkerProcessFinishInput,
+        WorkerProcessOutcome, WorkerReleaseInput, WorkerReleaseOutcome,
+        WorkerWorkspaceCleanupInput, WorkerWorkspaceInput,
     },
 };
 use std::{
@@ -22,6 +22,7 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -406,6 +407,8 @@ enum Workers {
         task: String,
         #[arg(long)]
         worker_label: String,
+        #[arg(long, value_enum, default_value_t = WorkerAdapter::Mock)]
+        adapter: WorkerAdapter,
         #[arg(long, default_value_t = 120)]
         lease_seconds: u32,
         #[arg(long, default_value_t = 4)]
@@ -448,18 +451,31 @@ enum Workers {
         #[arg(long)]
         summary: Option<String>,
     },
-    /// Acquire a lease, create an isolated worktree, and supervise the deterministic helper.
+    /// Acquire a lease, create an isolated worktree, and supervise an execution adapter.
     Run {
         #[arg(long)]
         task: String,
         #[arg(long)]
         worker_label: String,
+        #[arg(long, value_enum, default_value_t = WorkerAdapter::Mock)]
+        adapter: WorkerAdapter,
         #[arg(long, default_value_t = 120)]
         lease_seconds: u32,
         #[arg(long, default_value_t = 4)]
         max_active: u32,
         #[arg(long, default_value_t = 300)]
         timeout_seconds: u64,
+        /// OpenCode model in provider/model form; required for the opencode adapter.
+        #[arg(long)]
+        model: Option<String>,
+        /// Optional OpenCode agent name.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Required spending ceiling reported by OpenCode for the opencode adapter.
+        #[arg(long)]
+        max_cost_usd: Option<f64>,
+        #[arg(long, default_value_t = 20)]
+        max_steps: u32,
         #[arg(long, default_value_t = 100)]
         helper_delay_ms: u64,
         #[arg(long, default_value_t = 0)]
@@ -612,9 +628,14 @@ async fn run(cli: Cli) -> Result<bool> {
         Command::Workers(Workers::Run {
             task,
             worker_label,
+            adapter,
             lease_seconds,
             max_active,
             timeout_seconds,
+            model,
+            agent,
+            max_cost_usd,
+            max_steps,
             helper_delay_ms,
             helper_exit_code,
         }) => {
@@ -622,9 +643,14 @@ async fn run(cli: Cli) -> Result<bool> {
                 &dir,
                 task,
                 worker_label,
+                adapter,
                 lease_seconds,
                 max_active,
                 timeout_seconds,
+                model,
+                agent,
+                max_cost_usd,
+                max_steps,
                 helper_delay_ms,
                 helper_exit_code,
                 cli.json,
@@ -923,6 +949,7 @@ async fn run(cli: Cli) -> Result<bool> {
                 Command::Workers(Workers::Lease {
                     task,
                     worker_label,
+                    adapter,
                     lease_seconds,
                     max_active,
                     expected_task_revision,
@@ -930,6 +957,7 @@ async fn run(cli: Cli) -> Result<bool> {
                 }) => Operation::WorkerLease(WorkerLeaseInput {
                     task_id: task,
                     worker_label,
+                    adapter,
                     lease_seconds,
                     max_active,
                     expected_task_revision,
@@ -1163,18 +1191,123 @@ fn terminate(child: &mut std::process::Child) -> Result<std::process::ExitStatus
     Ok(child.wait()?)
 }
 
+fn provider_prompt(task: &serde_json::Value, worktree: &Path) -> String {
+    let title = task["title"].as_str().unwrap_or("Untitled task");
+    let objective = task["objective"].as_str().unwrap_or("");
+    let source = task["source"].as_str().unwrap_or("unknown");
+    let criteria = task["acceptance_criteria"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let path = item["path"].as_str().unwrap_or("?");
+                    match item["expected_sha256"].as_str() {
+                        Some(hash) => format!("- {path} (expected sha256 {hash})"),
+                        None => format!("- {path}"),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_else(|| "- none declared".into());
+    format!(
+        "You are an owner-run coding worker managed by Mother.\n\
+         Work only inside this Git worktree: {}\n\
+         Task: {title}\n\
+         Source: {source}\n\n\
+         Objective:\n{objective}\n\n\
+         Acceptance criteria:\n{criteria}\n\n\
+         Make the requested changes in the worktree and run relevant local checks. \
+         Do not claim that Mother completed or verified the task; the runtime observes \
+         declared files separately. End with a concise summary of changes and checks.",
+        worktree.display()
+    )
+}
+
+fn provider_executable() -> std::ffi::OsString {
+    std::env::var_os("MOTHER_OPENCODE_BIN").unwrap_or_else(|| "opencode".into())
+}
+
+fn configure_provider_environment(
+    command: &mut ProcessCommand,
+    dir: &Path,
+    execution_id: &str,
+) -> Result<()> {
+    let root = config::worker_execution_dir(dir, execution_id)?;
+    let config = root.join("opencode-config");
+    std::fs::create_dir(&config)?;
+    command.env_clear();
+    for key in [
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
+        "TERM",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    for (key, value) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("XDG_") {
+            command.env(key, value);
+        }
+    }
+    if let Some(value) = std::env::var_os("OPENCODE_DB") {
+        command.env("OPENCODE_DB", value);
+    }
+    command
+        .env("OPENCODE_CONFIG_DIR", &config)
+        .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+        .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+        .env("NO_COLOR", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "/bin/false");
+    Ok(())
+}
+
+fn worktree_changes(worktree: &Path) -> Result<Vec<serde_json::Value>> {
+    const MAX_CHANGES: usize = 64;
+    const MAX_PATH: usize = 256;
+    let output = git(
+        worktree,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let mut changes = Vec::new();
+    for token in output.stdout.split(|byte| *byte == 0) {
+        if changes.len() >= MAX_CHANGES {
+            break;
+        }
+        if token.len() < 4 || token[2] != b' ' {
+            continue;
+        }
+        let status = String::from_utf8_lossy(&token[..2]).into_owned();
+        let path = String::from_utf8_lossy(&token[3..]);
+        let mut end = path.len().min(MAX_PATH);
+        while !path.is_char_boundary(end) {
+            end -= 1;
+        }
+        changes.push(serde_json::json!({"status":status,"path":&path[..end]}));
+    }
+    Ok(changes)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn supervised_run(
     dir: &Path,
     task: String,
     worker_label: String,
+    adapter: WorkerAdapter,
     lease_seconds: u32,
     max_active: u32,
     timeout_seconds: u64,
+    model: Option<String>,
+    agent: Option<String>,
+    max_cost_usd: Option<f64>,
+    max_steps: u32,
     helper_delay_ms: u64,
     helper_exit_code: i32,
     compact: bool,
 ) -> Result<bool> {
+    let provider = adapter == WorkerAdapter::Opencode;
     if !(3..=3600).contains(&lease_seconds) {
         return Err(Error::Invalid(
             "lease_seconds must be in 3..=3600 for supervised runs".into(),
@@ -1191,11 +1324,59 @@ async fn supervised_run(
     if !(0..=255).contains(&helper_exit_code) {
         return Err(Error::Invalid("helper_exit_code must be in 0..=255".into()));
     }
+    if provider {
+        let model = model
+            .as_deref()
+            .filter(|value| {
+                value.len() <= 256
+                    && !value.contains('\0')
+                    && *value == value.trim()
+                    && value
+                        .split_once('/')
+                        .is_some_and(|(provider, name)| !provider.is_empty() && !name.is_empty())
+            })
+            .ok_or_else(|| {
+                Error::Invalid(
+                    "the opencode adapter requires --model in provider/model form".into(),
+                )
+            })?;
+        if let Some(agent) = &agent
+            && (agent.len() > 128
+                || agent.contains('\0')
+                || agent != agent.trim()
+                || agent.trim().is_empty())
+        {
+            return Err(Error::Invalid(
+                "agent must contain 1..=128 UTF-8 bytes and no NUL".into(),
+            ));
+        }
+        let cost = max_cost_usd.filter(|value| value.is_finite() && *value > 0.0);
+        if cost.is_none() {
+            return Err(Error::Invalid(
+                "the opencode adapter requires a positive --max-cost-usd budget".into(),
+            ));
+        }
+        if !(1..=200).contains(&max_steps) {
+            return Err(Error::Invalid("max_steps must be in 1..=200".into()));
+        }
+        if helper_delay_ms != 100 || helper_exit_code != 0 {
+            return Err(Error::Invalid(
+                "helper-delay-ms and helper-exit-code apply only to the mock adapter".into(),
+            ));
+        }
+        eprintln!("provider worker model={model}; existing host OpenCode login will be used");
+    } else if model.is_some() || agent.is_some() || max_cost_usd.is_some() || max_steps != 20 {
+        return Err(Error::Invalid(
+            "model, agent, max-cost-usd and non-default max-steps apply only to the opencode adapter"
+                .into(),
+        ));
+    }
     let leased = request_result(
         dir,
         Operation::WorkerLease(WorkerLeaseInput {
             task_id: task,
             worker_label,
+            adapter,
             lease_seconds,
             max_active,
             expected_task_revision: None,
@@ -1250,26 +1431,75 @@ async fn supervised_run(
             return Err(error);
         }
     };
-    let executable = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(error) => {
-            best_effort_abandon(dir, &execution_id).await;
-            return Err(error.into());
-        }
+    let prompt = if provider {
+        let task = match request_result(
+            dir,
+            Operation::TaskGet {
+                task_id: leased["task_id"].as_str().unwrap().into(),
+            },
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                best_effort_abandon(dir, &execution_id).await;
+                return Err(error);
+            }
+        };
+        Some(provider_prompt(&task, &worktree))
+    } else {
+        None
     };
-    let mut child = match ProcessCommand::new(executable)
-        .arg("__mock-worker")
-        .arg("--parent-pid")
-        .arg(std::process::id().to_string())
-        .arg("--execution")
-        .arg(&execution_id)
-        .arg("--delay-ms")
-        .arg(helper_delay_ms.to_string())
-        .arg("--exit-code")
-        .arg(helper_exit_code.to_string())
+    let provider_state = provider.then(|| Arc::new(Mutex::new(provider::Telemetry::default())));
+    let model = model.unwrap_or_default();
+    let mut command = if provider {
+        let mut command = ProcessCommand::new(provider_executable());
+        command
+            .arg("run")
+            .arg("--pure")
+            .arg("--auto")
+            .arg("--format")
+            .arg("json")
+            .arg("--dir")
+            .arg(&worktree)
+            .arg("--model")
+            .arg(&model)
+            .arg("--title")
+            .arg(format!("Mother {execution_id}"));
+        if let Some(agent) = &agent {
+            command.arg("--agent").arg(agent);
+        }
+        command.arg(prompt.as_deref().unwrap_or_default());
+        if let Err(error) = configure_provider_environment(&mut command, dir, &execution_id) {
+            best_effort_abandon(dir, &execution_id).await;
+            return Err(error);
+        }
+        command
+    } else {
+        let executable = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(error) => {
+                best_effort_abandon(dir, &execution_id).await;
+                return Err(error.into());
+            }
+        };
+        let mut command = ProcessCommand::new(executable);
+        command
+            .arg("__mock-worker")
+            .arg("--parent-pid")
+            .arg(std::process::id().to_string())
+            .arg("--execution")
+            .arg(&execution_id)
+            .arg("--delay-ms")
+            .arg(helper_delay_ms.to_string())
+            .arg("--exit-code")
+            .arg(helper_exit_code.to_string())
+            .env_clear()
+            .env("HOME", &worktree);
+        command
+    };
+    let mut child = match command
         .current_dir(&worktree)
-        .env_clear()
-        .env("HOME", &worktree)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1282,7 +1512,13 @@ async fn supervised_run(
             return Err(error.into());
         }
     };
-    let stdout = child.stdout.take().map(capture);
+    let stdout = match provider_state.clone() {
+        Some(state) => child
+            .stdout
+            .take()
+            .map(|stream| provider::monitor(stream, state)),
+        None => child.stdout.take().map(capture),
+    };
     let stderr = child.stderr.take().map(capture);
     let attached = match request_result(
         dir,
@@ -1306,14 +1542,27 @@ async fn supervised_run(
     let interval = Duration::from_secs((lease_seconds / 3).clamp(1, 5) as u64);
     let started = Instant::now();
     let mut heartbeat = Instant::now();
-    let mut timed_out = false;
+    let mut budget_reason = None;
     let status = loop {
+        if let Some(state) = &provider_state {
+            let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
+            if telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
+                budget_reason = Some("cost");
+            } else if telemetry.steps > u64::from(max_steps) {
+                budget_reason = Some("steps");
+            }
+        }
+        if budget_reason.is_none() && started.elapsed() >= Duration::from_secs(timeout_seconds) {
+            budget_reason = Some("timeout");
+        }
+        if budget_reason.is_some() {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            break terminate(&mut child)?;
+        }
         if let Some(status) = child.try_wait()? {
             break status;
-        }
-        if started.elapsed() >= Duration::from_secs(timeout_seconds) {
-            timed_out = true;
-            break terminate(&mut child)?;
         }
         if heartbeat.elapsed() >= interval {
             let value = request_result(
@@ -1341,20 +1590,33 @@ async fn supervised_run(
                     .await
                     .ok()
                     .filter(|value| value["process"]["status"] == "running");
-                    if let Some(current) = current
-                        && request_result(
+                    if let Some(current) = current {
+                        let provider_metadata = provider_state.as_ref().map(|state| {
+                            let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
+                            telemetry.metadata(
+                                &model,
+                                max_cost_usd.unwrap_or(0.0),
+                                u64::from(max_steps),
+                                timeout_seconds,
+                                Some("heartbeat_failed"),
+                                vec![],
+                            )
+                        });
+                        if request_result(
                             dir,
                             Operation::WorkerProcessFinish(WorkerProcessFinishInput {
                                 execution_id: execution_id.clone(),
                                 expected_revision: current["revision"].as_u64().unwrap(),
                                 outcome: WorkerProcessOutcome::Killed,
                                 exit_code: None,
+                                provider: provider_metadata,
                             }),
                         )
                         .await
                         .is_err()
-                    {
-                        best_effort_abandon(dir, &execution_id).await;
+                        {
+                            best_effort_abandon(dir, &execution_id).await;
+                        }
                     }
                     return Err(error);
                 }
@@ -1371,7 +1633,15 @@ async fn supervised_run(
     if let Err(error) = write_log(dir, &execution_id, &stdout, &stderr) {
         eprintln!("worker process log could not be written: {error}");
     }
-    let outcome = if timed_out {
+    if let Some(state) = &provider_state {
+        let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
+        if telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
+            budget_reason = Some("cost");
+        } else if telemetry.steps > u64::from(max_steps) {
+            budget_reason = Some("steps");
+        }
+    }
+    let outcome = if budget_reason.is_some() {
         WorkerProcessOutcome::Killed
     } else if status.success() {
         WorkerProcessOutcome::Exited
@@ -1380,6 +1650,31 @@ async fn supervised_run(
     } else {
         WorkerProcessOutcome::Killed
     };
+    let provider_metadata = provider_state.as_ref().map(|state| {
+        let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut observation_failed = false;
+        let changes = match worktree_changes(&worktree) {
+            Ok(changes) => changes,
+            Err(error) => {
+                eprintln!("provider worktree observation failed: {error}");
+                observation_failed = true;
+                Vec::new()
+            }
+        };
+        let mut metadata = telemetry.metadata(
+            &model,
+            max_cost_usd.unwrap_or(0.0),
+            u64::from(max_steps),
+            timeout_seconds,
+            budget_reason,
+            changes,
+        );
+        if observation_failed {
+            metadata["worktree_mutation"] = serde_json::Value::Null;
+            metadata["workspace_observation_error"] = serde_json::json!("git_status_failed");
+        }
+        metadata
+    });
     let finished = match request_result(
         dir,
         Operation::WorkerProcessFinish(WorkerProcessFinishInput {
@@ -1387,6 +1682,7 @@ async fn supervised_run(
             expected_revision: revision,
             outcome,
             exit_code: status.code(),
+            provider: provider_metadata,
         }),
     )
     .await

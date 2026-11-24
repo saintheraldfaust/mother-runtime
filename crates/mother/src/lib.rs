@@ -8,6 +8,7 @@ pub mod github;
 pub mod mcp;
 pub mod personas;
 pub mod protocol;
+pub mod provider;
 pub mod runtime;
 pub mod store;
 pub mod tasks;

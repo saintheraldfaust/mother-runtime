@@ -58,5 +58,6 @@ adapter must add process lifecycle, isolated worktrees, budget enforcement,
 evidence reconciliation and independent review as separate verified boundaries.
 
 ADR 0007 later added an owner-run supervisor and checkout-isolated worktree for
-one deterministic mock helper. That does not turn a lease into a sandbox or add
-provider, budget, test or review capabilities.
+one deterministic mock helper. ADR 0009 adds an OpenCode CLI adapter with
+provider-reported budgets, but a lease still is not a sandbox or a test/review
+capability.

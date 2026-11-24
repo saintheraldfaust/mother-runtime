@@ -10,7 +10,8 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `tasks`: typed host-tracked task contracts and explicit state graph.
 - `personas`: typed persona definitions, statuses, capabilities and authorization claims.
 - `github`: typed read-only GitHub identity records and the fixed `gh api user` verifier.
-- `workers`: typed execution-lease, workspace and process inputs, statuses, outcomes and limits.
+- `workers`: typed execution-lease adapter, workspace and process inputs, statuses, outcomes and limits.
+- `provider`: bounded OpenCode CLI JSON telemetry and process-output monitoring.
 - `evidence`: bounded descriptor-relative repository file observations.
 - `store/tasks`: task/dependency persistence, immutable checkpoints/transitions,
   optimistic revisions, and local file-contract completion gates.
@@ -22,7 +23,8 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
   revision history, revocation and paginated read-only metadata.
 - `store/workers`: transactional dependency-aware lease acquisition, bounded
   concurrency, heartbeats, expiry recovery, release, mock checkpoints, workspace
-  registration, process attachment/finish and bounded artifact evidence.
+  registration, adapter-aware process attachment/finish, bounded provider metadata
+  and bounded artifact evidence.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
 - `main`: Clap command grammar and JSON presentation.
@@ -47,7 +49,10 @@ The owner-run CLI may invoke one fixed read-only `gh api user` verification comm
 the runtime itself does not execute GitHub commands. Worker lease operations are
 SQLite coordination: the runtime does not launch, supervise or signal processes.
 The separate owner-run `workers run` command creates a detached Git worktree and
-supervises one fixed deterministic mock helper in its own process group.
+supervises either the deterministic mock helper or an OpenCode CLI process in its own
+process group. The OpenCode adapter uses a documented non-interactive JSON interface,
+host provider login, an isolated OpenCode configuration, explicit cost/step/timeout
+limits and bounded telemetry. It is not a sandbox or credential broker.
 
 Each socket connection carries one newline-terminated request and response.
 Requests are limited to 64 KiB and responses to 4 MiB, with five-second read/write
@@ -87,7 +92,8 @@ transitions/checkpoints. Schema 5 adds read-only verified GitHub identity record
 persona bindings, revocation and immutable identity revisions/events. Schema 6 adds
 worker execution leases and immutable lease events. Schema 7 adds worker workspaces
 and supervised process records; schema 8 adds an explicit `lost` process state for
-abandoned supervision. File observation runs on the runtime blocking threads within
+abandoned supervision; schema 9 rebuilds executions to allow the `opencode` adapter
+while preserving the execution graph. File observation runs on the runtime blocking threads within
 a state transaction, without invoking any shell or provider. Filesystem observations
 are not transactional with SQLite; they are point-in-time evidence with size/path
 restrictions. Completion rechecks the latest validating checkpoint. See
@@ -95,8 +101,9 @@ restrictions. Completion rechecks the latest validating checkpoint. See
 [ADR 0004](DECISIONS/0004-persona-policy.md),
 [ADR 0005](DECISIONS/0005-github-identity-boundary.md),
 [ADR 0006](DECISIONS/0006-worker-lease-boundary.md),
-[ADR 0007](DECISIONS/0007-worker-process-boundary.md) and
-[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md).
+[ADR 0007](DECISIONS/0007-worker-process-boundary.md),
+[ADR 0008](DECISIONS/0008-abandoned-process-reconciliation.md) and
+[ADR 0009](DECISIONS/0009-opencode-provider-adapter.md).
 
 Lists cap both item count and approximately 1 MiB of serialized item data. Cursors
 advance only to the final returned item, so byte-limited pages do not lose records.
