@@ -205,7 +205,8 @@ reports `repository_mutation: false` and `completion: false`.
 leases a ready task, resolves the registered repository's current Git commit, creates
 a detached worktree under `data/workers/<execution_id>/worktree`, records the base
 commit, launches the adapter in its own process group, attaches its PID, heartbeats
-while it is alive, writes a bounded `worker.log`, and finalizes process evidence.
+while it is alive, reaps remaining process-group members after exit, writes a
+bounded `worker.log`, and finalizes process evidence.
 
 The durable execution records the adapter selected at lease time. The default is
 `mock`; `--adapter opencode` selects the OpenCode CLI adapter.

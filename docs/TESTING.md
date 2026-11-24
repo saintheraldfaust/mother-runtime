@@ -75,9 +75,11 @@ Process integration coverage:
   retained worktree through `workers cleanup`.
 - A fake `opencode` executable verifies the invoked flags and isolated-config
   environment, emits documented JSON events and writes an artifact in the worktree.
+  It also leaves a background child holding stdout after the main process exits.
   The OpenCode adapter records session, cost, tokens, steps, tool calls, bounded
-  workspace changes and artifact evidence, leaves the project checkout untouched,
-  and does not claim project-repository mutation or completion.
+  workspace changes and artifact evidence, reaps the process group before joining
+  output, leaves the project checkout untouched, and does not claim
+  project-repository mutation or completion.
 - A fake `opencode` executable reports cost over the requested ceiling and remains
   running. The supervisor terminates its process group, records `budget_reason:
   cost`, kills the execution and fails the task. A separate provider prompt is not

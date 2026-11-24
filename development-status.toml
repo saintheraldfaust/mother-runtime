@@ -129,7 +129,7 @@ coverage = [
   "Owner-run mock process isolates its checkout, writes one artifact, and never completes the task",
   "Abandoned supervision marks the process lost, blocks the task, and permits explicit cleanup",
   "Schema 8 preserves the execution graph while adding the opencode adapter",
-  "Fake OpenCode CLI process records bounded telemetry, worktree changes and artifact evidence without claiming project-repository mutation",
+  "Fake OpenCode CLI process records bounded telemetry, worktree changes and artifact evidence, and reaps a lingering output-holding child without claiming project-repository mutation",
   "Provider workspace-change metadata is trimmed to remain under the persisted size limit",
   "Fake OpenCode CLI process is terminated when provider-reported cost exceeds the configured ceiling",
   "Fake OpenCode CLI process is terminated when reported steps exceed the configured ceiling",

@@ -54,7 +54,9 @@ Add an `opencode` adapter alongside the existing `mock` adapter.
 - The supervisor checks cost and step budgets while the process runs and again
   after stdout completes. An exceeded budget terminates the process group when
   still running and marks the execution killed and the task failed. Timeout is
-  recorded separately. The provider metadata records `budget_reason`.
+  recorded separately. The provider metadata records `budget_reason`. After any
+  exit, remaining process-group members are terminated before output handles are
+  joined, so a background child cannot stall finalization indefinitely.
 - Provider process completion requires bounded JSON provider metadata. The result
   reports `repository_mutation: null` because Mother does not verify project
   repository changes, and derives `worktree_mutation` from a bounded `git status`

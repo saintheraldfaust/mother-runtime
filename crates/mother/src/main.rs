@@ -1191,6 +1191,32 @@ fn terminate(child: &mut std::process::Child) -> Result<std::process::ExitStatus
     Ok(child.wait()?)
 }
 
+fn process_group_exists(pid: i32) -> bool {
+    if unsafe { libc::kill(-pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+fn terminate_process_group(pid: u32) {
+    let pid = pid as i32;
+    if !process_group_exists(pid) {
+        return;
+    }
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(20));
+        if !process_group_exists(pid) {
+            return;
+        }
+    }
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+}
+
 fn provider_prompt(task: &serde_json::Value, worktree: &Path) -> String {
     let title = task["title"].as_str().unwrap_or("Untitled task");
     let objective = task["objective"].as_str().unwrap_or("");
@@ -1512,6 +1538,7 @@ async fn supervised_run(
             return Err(error.into());
         }
     };
+    let process_group = child.id();
     let stdout = match provider_state.clone() {
         Some(state) => child
             .stdout
@@ -1624,6 +1651,7 @@ async fn supervised_run(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
+    terminate_process_group(process_group);
     let stdout = stdout
         .map(|handle| handle.join().unwrap_or_default())
         .unwrap_or_default();

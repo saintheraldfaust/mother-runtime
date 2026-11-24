@@ -1653,6 +1653,7 @@ while [ "$step" -lt {steps} ]; do
   step=$((step + 1))
 done
 sleep {delay_seconds}
+sleep 15 &
 printf '%s\n' '{{"type":"text","sessionID":"ses-test","part":{{"text":"provider finished"}}}}'
 "#
     );
@@ -1663,7 +1664,7 @@ printf '%s\n' '{{"type":"text","sessionID":"ses-test","part":{{"text":"provider 
 
 #[tokio::test]
 async fn supervised_opencode_process_records_bounded_provider_telemetry() {
-    tokio::time::timeout(Duration::from_secs(45), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         let temp = directory();
         let dir = temp.path().join("data");
         success(&dir, &["init"]);
@@ -1876,7 +1877,7 @@ async fn supervised_opencode_process_stops_when_step_budget_is_exceeded() {
 
 #[tokio::test]
 async fn supervised_opencode_process_rejects_instant_over_budget_completion() {
-    tokio::time::timeout(Duration::from_secs(45), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         let temp = directory();
         let dir = temp.path().join("data");
         success(&dir, &["init"]);
