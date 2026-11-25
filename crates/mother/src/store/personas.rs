@@ -415,7 +415,8 @@ mod tests {
             title: "Persona-gated task".into(),
             objective: "Exercise runtime capability checks".into(),
             source: "test".into(),
-            acceptance_criteria: vec![ArtifactCriterion {
+            acceptance_criteria: vec![],
+            artifact_constraints: vec![ArtifactCriterion {
                 path: "artifact".into(),
                 expected_sha256: None,
             }],

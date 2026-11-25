@@ -12,7 +12,7 @@ local project/context workflow, with verified restart and multiple-process acces
 | 5: personas | Registry, revisions, status and asserted capability gates verified | Mandatory-persona client model, notification/refresh certification, worker handoff. |
 | 6: GitHub accounts | Read-only profile verification, identity records and revocation verified with a fake `gh` | Real-account certification, repository/action scopes, credential broker, write authentication, Git push isolation. |
 | 7–9: execution/workflow | Dependency-aware leases, bounded scheduling, supervised mock/Codex processes, real Codex file task, isolated worktrees and a fake-tested optional OpenCode adapter verified | Broader provider certification, stronger isolation, tests/evidence reconciliation, authorized GitHub workflow. |
-| 10–12: TUI/hardening/release | Read-only Ratatui dashboard implemented | Governed TUI actions, cross-provider validation, packaging, release readiness. |
+| 10–12: TUI/hardening/release | Project/task/owned-execution controls and filename-free task intake verified with fixtures | Real VS Code landing-page workflow, cross-provider validation, packaging, release readiness. |
 
 MCP evidence: two independent rmcp clients launch separate bridge processes, use
 2025-11-25 initialize and 2026-07-28 discover lifecycles, see CLI changes, and recover
@@ -66,12 +66,12 @@ null, and reports worktree changes from a bounded Git observation. This is not a
 sandbox, independent spend meter, automatic reaper, test runner or independent
 review.
 
-Next vertical slice: governed task creation and execution controls in the live TUI,
-followed by worker test-evidence reconciliation and stronger isolation. The owner
-uses Codex; OpenCode remains optional and real OpenCode certification is deferred.
-Keep GitHub writes, credential brokering and independent review gates separate until
-their boundaries are verified. Real-host cross-assistant continuity remains required
-before claiming cross-provider execution. See [Codex](CODEX.md) and [TUI](TUI.md).
+Current vertical slice: outcome-driven task intake, optional advanced file constraints,
+discovered artifact observations and TUI project/task/Codex controls. Regression and
+scripted terminal tests pass with fixtures. Next exercise the real VS Code project
+workflow, then implement outcome/test-evidence reconciliation and stronger isolation.
+Keep GitHub writes, credential brokering and independent review separate until their
+boundaries are verified. See [Codex](CODEX.md) and [TUI](TUI.md).
 
 Before optional features, complete competitive analysis as required by the directive.
 Performance targets remain targets until representative benchmarks are recorded.

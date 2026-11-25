@@ -34,3 +34,8 @@ plans, unsanitized security investigations, transcripts and operational data und
 the ignored `.mother-private/` directory. Preserve mixed-content originals privately
 and create reviewed public versions; do not move documents based only on filenames.
 Audit the index and unpublished history as well as ignore patterns before a push.
+
+Task interfaces collect goals and desired behavior. Agents choose implementation
+files; filenames and file hashes are optional advanced constraints. Preserve legacy
+file contracts, but never treat an empty file list, observed changes or model claims
+as verified acceptance of behavioral requirements.

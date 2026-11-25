@@ -13,17 +13,25 @@ verified and no process path completes a task automatically.
 ## Contracts and revisions
 
 Create a task from [examples/task.json](../examples/task.json), replacing its
-project ID. Required fields are project, title, objective, source, and one to 16
-artifact criteria. A criterion is a normalized repository-relative `path` and an
-optional lowercase SHA-256 expectation. When the digest is absent, acceptance
-checks file presence and unchanged content since the validating checkpoint.
-These contracts do not encode arbitrary behavioral or test requirements.
+project ID. Required fields are project, title, objective and source. Filenames
+are not required. Optional `acceptance_criteria` are plain-language desired outcomes,
+up to 16 strings of at most 1024 UTF-8 bytes each. The agent chooses implementation
+files after inspecting the repository. An objective-only task is also valid.
 
-Titles/sources allow 256 UTF-8 bytes, objectives 4096, and paths 512. Up to 16
-unique dependencies must already exist in the same project. Since dependencies
-are fixed at creation and only reference existing tasks, API-created graphs are
-acyclic. Task input is bounded to 24 KiB of serialized JSON. `review_required`
-defaults to false; true blocks completion until a review verifier is implemented.
+Optional `artifact_constraints` specify up to 16 known repository-relative paths
+and optional lowercase SHA-256 expectations. Use them when a particular file is
+an actual requirement. See [the advanced example](../examples/task-file-constraints.json).
+Original path objects in `acceptance_criteria` remain accepted for compatibility.
+Task reads expose separate `outcome_criteria` and `artifact_constraints` projections
+of the one persisted contract; existing task records are not rewritten.
+
+Titles/sources allow 256 UTF-8 bytes, objectives 4096, and constraint paths 512.
+Up to 16 unique dependencies must already exist in the same project. Task input
+is bounded to 24 KiB. `review_required` defaults to false; true blocks completion
+until a review verifier is implemented. Behavioral criteria similarly require an
+outcome verifier: file presence, changed-file lists and model claims are insufficient.
+Objective-only tasks cannot complete by passing an empty artifact list. Existing
+file-only contracts retain their limited file-content completion behavior.
 
 A task starts at task revision 1 and project revision N+1. Each accepted transition
 or checkpoint increments both revisions. Mutations require `expected_task_revision`
@@ -334,3 +342,14 @@ Independent spend metering, automatic retry, test execution, review verification
 human approval and GitHub writes remain unimplemented. Successful workers leave
 tasks awaiting input rather than completed. See [Codex execution](CODEX.md) for
 subscription accounting, privacy and limit semantics, and [TUI](TUI.md) for live reads.
+
+## Discovered artifacts
+
+Provider workers report bounded Git status paths after execution. The runtime
+independently reads valid paths within the recorded worktree and persists their
+size, hash and observation status as `result.discovered_artifacts`. These observations
+are separate from explicit file-constraint evidence. Unsafe, oversized, missing or
+unsupported files retain an explanatory status. Collection and path bounds can
+truncate discovery; provider metadata exposes `workspace_changes_may_be_truncated`.
+This is point-in-time evidence, not a complete filesystem snapshot or behavioral
+verification. Worker output still requires inspection and never completes a task.

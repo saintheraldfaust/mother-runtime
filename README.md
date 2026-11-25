@@ -15,11 +15,15 @@ A CLI and terminal dashboard connect to the same service.
 - Runs Codex workers in separate Git worktrees, with execution leases, heartbeats,
   timeout limits and file observations.
 - Displays tasks, workers, personas, handoffs, GitHub identity metadata and activity
-  in a read-only Ratatui dashboard.
+  in a Ratatui dashboard.
 
 Codex workers use the existing host login. Mock and OpenCode adapters are also
 available. GitHub integration currently supports read-only identity verification
 and persona bindings.
+
+Tasks describe objectives and desired behavior. Agents choose implementation files.
+Known filenames and hashes are optional advanced constraints. Mother records the
+files observed after execution; those observations do not establish behavioral success.
 
 ## How it works
 
@@ -32,7 +36,8 @@ retry responses commit in a single transaction. Project records persist independ
 of coding-assistant sessions; continuity uses explicitly recorded context and
 checkpoints rather than importing conversation history.
 
-Worker execution is an explicit CLI operation. The supervisor leases a ready task,
+Worker execution uses an explicit CLI supervisor, also invoked by the TUI controls.
+The supervisor leases a ready task,
 creates a detached worktree from the repository's current commit, starts the selected
 coding agent and records its outcome. For Codex, it requests the `workspace-write`
 sandbox and retains usage metadata and file observations while discarding raw model
@@ -57,13 +62,18 @@ to the project's `.codex/config.toml`. Reload the Codex VS Code session in the t
 project to load the tools. The default runtime directory is `~/.mother`.
 
 In the dashboard, use Tab to switch views, Up and Down to select records, and q to
-quit. Task creation and state changes use the CLI or MCP; worker startup uses the CLI.
+quit. The task and worker forms are described in the TUI guide; their runtime
+verification is pending. CLI and MCP task operations remain available.
 See [Codex setup](docs/CODEX.md), [CLI commands](docs/CLI.md) and
 [TUI controls](docs/TUI.md).
 
 ## Current scope
 
-Mother is under active development. A real Codex worker has produced a file matching
+Mother is under active development. TUI forms for project registration, task creation
+and worker controls are implemented in the current development changes; regression tests pass. A scripted terminal workflow uses a simulated Codex worker;
+the real project workflow in VS Code remains to be exercised.
+
+A real Codex worker has produced a file matching
 its declared SHA-256 contract, and a real Codex CLI client has queried Mother through
 MCP. Interactive VS Code integration and cross-assistant continuation have not yet
 been verified end to end.

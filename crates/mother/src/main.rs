@@ -476,6 +476,9 @@ enum Workers {
         max_active: u32,
         #[arg(long, default_value_t = 300)]
         timeout_seconds: u64,
+        /// Reject a launch if the task changed after operator confirmation.
+        #[arg(long)]
+        expected_task_revision: Option<u64>,
         /// Codex model name (optional), or required provider/model for OpenCode.
         #[arg(long)]
         model: Option<String>,
@@ -660,6 +663,7 @@ async fn run(cli: Cli) -> Result<bool> {
             lease_seconds,
             max_active,
             timeout_seconds,
+            expected_task_revision,
             model,
             agent,
             max_cost_usd,
@@ -675,6 +679,7 @@ async fn run(cli: Cli) -> Result<bool> {
                 lease_seconds,
                 max_active,
                 timeout_seconds,
+                expected_task_revision,
                 model,
                 agent,
                 max_cost_usd,
@@ -1249,22 +1254,29 @@ fn provider_prompt(task: &serde_json::Value, worktree: &Path) -> String {
     let title = task["title"].as_str().unwrap_or("Untitled task");
     let objective = task["objective"].as_str().unwrap_or("");
     let source = task["source"].as_str().unwrap_or("unknown");
-    let criteria = task["acceptance_criteria"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| {
-                    let path = item["path"].as_str().unwrap_or("?");
-                    match item["expected_sha256"].as_str() {
-                        Some(hash) => format!("- {path} (expected sha256 {hash})"),
-                        None => format!("- {path}"),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_else(|| "- none declared".into());
+    let outcomes = mother_runtime::tasks::outcome_criteria(task).unwrap_or_default();
+    let criteria = if outcomes.is_empty() {
+        "- Use the objective above; no additional outcomes specified.".into()
+    } else {
+        outcomes
+            .iter()
+            .map(|value| format!("- {value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let constraints = mother_runtime::tasks::file_constraints(task).unwrap_or_default();
+    let files = if constraints.is_empty() {
+        "- None. Choose the files and structure needed to implement the objective.".into()
+    } else {
+        constraints
+            .iter()
+            .map(|file| match &file.expected_sha256 {
+                Some(hash) => format!("- {} (expected sha256 {hash})", file.path),
+                None => format!("- {}", file.path),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     format!(
         "You are an owner-run coding worker managed by Mother.\n\
          Work only inside this Git worktree: {}\n\
@@ -1272,9 +1284,12 @@ fn provider_prompt(task: &serde_json::Value, worktree: &Path) -> String {
          Source: {source}\n\n\
          Objective:\n{objective}\n\n\
          Acceptance criteria:\n{criteria}\n\n\
+         Optional file constraints:\n{files}\n\n\
+         Inspect the repository and describe a brief implementation plan before editing. \
+         Determine the implementation files yourself; the user does not have to name them.\n\n\
          Make the requested changes in the worktree and run relevant local checks. \
          Do not claim that Mother completed or verified the task; the runtime observes \
-         declared files separately. End with a concise summary of changes and checks.",
+         file constraints and discovered changed files separately. End with a concise summary of changes, files, checks actually performed and acceptance criteria still unverified.",
         worktree.display()
     )
 }
@@ -1339,7 +1354,7 @@ fn worktree_changes(worktree: &Path) -> Result<Vec<serde_json::Value>> {
         while !path.is_char_boundary(end) {
             end -= 1;
         }
-        changes.push(serde_json::json!({"status":status,"path":&path[..end]}));
+        changes.push(serde_json::json!({"status":status,"path":&path[..end],"path_truncated":end<path.len()}));
     }
     Ok(changes)
 }
@@ -1353,6 +1368,7 @@ async fn supervised_run(
     lease_seconds: u32,
     max_active: u32,
     timeout_seconds: u64,
+    expected_task_revision: Option<u64>,
     model: Option<String>,
     agent: Option<String>,
     max_cost_usd: Option<f64>,
@@ -1444,6 +1460,11 @@ async fn supervised_run(
                 .into(),
         ));
     }
+    // Install handlers before publishing a lease, so a dashboard can stop its owned supervisor.
+    let mut terminate_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut interrupt_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let leased = request_result(
         dir,
         Operation::WorkerLease(WorkerLeaseInput {
@@ -1452,7 +1473,7 @@ async fn supervised_run(
             adapter,
             lease_seconds,
             max_active,
-            expected_task_revision: None,
+            expected_task_revision,
             expected_project_revision: None,
         }),
     )
@@ -1684,7 +1705,14 @@ async fn supervised_run(
     let started = Instant::now();
     let mut heartbeat = Instant::now();
     let mut budget_reason = None;
+    let mut stopped = false;
     let status = loop {
+        tokio::select! {
+            biased;
+            _=terminate_signal.recv()=>{stopped=true;},
+            _=interrupt_signal.recv()=>{stopped=true;},
+            _=tokio::time::sleep(Duration::from_millis(1))=>{},
+        }
         if let Some(state) = &provider_state {
             let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
             if !codex && telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
@@ -1698,7 +1726,7 @@ async fn supervised_run(
         if budget_reason.is_none() && started.elapsed() >= Duration::from_secs(timeout_seconds) {
             budget_reason = Some("timeout");
         }
-        if budget_reason.is_some() {
+        if budget_reason.is_some() || stopped {
             if let Some(status) = child.try_wait()? {
                 break status;
             }
@@ -1792,7 +1820,7 @@ async fn supervised_run(
             let t = s.lock().unwrap_or_else(|e| e.into_inner());
             !t.completed || t.failed
         });
-    let outcome = if budget_reason.is_some() {
+    let outcome = if budget_reason.is_some() || stopped {
         WorkerProcessOutcome::Killed
     } else if status.success() && !codex_failed {
         WorkerProcessOutcome::Exited
@@ -1820,6 +1848,7 @@ async fn supervised_run(
             budget_reason,
             changes,
         );
+        metadata["stop_requested"] = serde_json::json!(stopped);
         if observation_failed {
             metadata["worktree_mutation"] = serde_json::Value::Null;
             metadata["workspace_observation_error"] = serde_json::json!("git_status_failed");

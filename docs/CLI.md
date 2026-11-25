@@ -10,7 +10,7 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `mcp` | Serve MCP stdio; forward operations to the existing runtime, without opening SQLite. |
 | `start` | Initialize private state if needed and start the canonical service in the background; reuse a reachable service. |
 | `setup-codex` | Start Mother, register the current project, and preserve/extend local Codex MCP configuration. |
-| `ui [--once]` | Open the read-only live dashboard, or print one overview frame; start Mother if needed. |
+| `ui [--once]` | Open the dashboard and action forms, or print one overview frame; start Mother if needed. New action controls await runtime verification. |
 | `serve` | Hold the writer lock and run the foreground local service. |
 | `doctor` | Report private-directory, configuration, schema/integrity, and runtime health. |
 | `status` | Retrieve health from the running service. |
@@ -26,7 +26,7 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `handoff list --project ID [--after N] [--limit N]` | Discover handoff metadata. |
 | `handoff show --handoff ID` | Read exact package bytes, SHA-256, live revision and claim status. |
 | `handoff resume --handoff ID --recipient LABEL --expected-revision N` | Claim an unchanged, unclaimed package once; does not start execution. |
-| `tasks create --file FILE` | Create a host-tracked task from a bounded JSON file contract. |
+| `tasks create --file FILE` | Create a task from an objective, optional behavioral criteria and optional file constraints. |
 | `tasks inspect --task ID` | Retrieve task revisions, dependencies, latest checkpoint/transition, and evidence. |
 | `tasks list --project ID [--state STATE] [--after N] [--limit N]` | Page through task summaries. |
 | `tasks transition --task ID --state STATE --source SOURCE --reason TEXT --expected-task-revision N [--owner-label LABEL] [--persona ID --expected-persona-revision N] [--expected-project-revision N]` | Apply an allowed state transition with evidence/dependency gates and optional current-persona capability enforcement. |
@@ -41,7 +41,7 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `workers heartbeat --execution ID --expected-revision N [--lease-seconds N]` | Extend an active lease from the current time. |
 | `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
 | `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state; a running supervised process blocks release. |
-| `workers run --task ID --worker-label LABEL [--adapter mock\|codex\|opencode] [--model PROVIDER/MODEL] [--agent NAME] [--max-cost-usd N] [--max-steps N] [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, supervise the selected mock, Codex or OpenCode CLI process, and finalize evidence. Codex uses host login and optional `--model`, rejects dollar budgets and agent selection; OpenCode requires `--model` and positive `--max-cost-usd`. |
+| `workers run --task ID --worker-label LABEL [--adapter mock\|codex\|opencode] [--model PROVIDER/MODEL] [--agent NAME] [--max-cost-usd N] [--max-steps N] [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--expected-task-revision N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, supervise the selected mock, Codex or OpenCode CLI process, and finalize evidence. Codex uses host login and optional `--model`, rejects dollar budgets and agent selection; OpenCode requires `--model` and positive `--max-cost-usd`. |
 | `workers abandon --execution ID [--force]` | Reconcile a crashed supervisor: mark a running process `lost`, block its task, and leave the worktree for explicit cleanup. Refuses while the recorded PID exists unless forced. |
 | `workers cleanup --execution ID` | Remove a retained non-active worktree, prune Git metadata, and mark the workspace removed. |
 | `workers recover` | Expire overdue leases; a task with a running supervised process becomes blocked instead of requeued. |
@@ -129,3 +129,9 @@ abandoned helper. Retained worktrees require explicit `workers cleanup`. See
 [worker operations](ORCHESTRATION.md#worker-execution-leases).
 
 See [Codex setup and execution](CODEX.md) and [dashboard controls](TUI.md).
+
+The current terminal-action changes add optional `--expected-task-revision N` to
+`workers run`, checked atomically when leasing. Supervised runs now handle SIGTERM
+and SIGINT by stopping their worker process group and recording the result. A stopped
+run produces a killed process and a failed task with retained files. These changes
+pass regression and simulated-terminal checks. See [terminal controls](TUI.md).

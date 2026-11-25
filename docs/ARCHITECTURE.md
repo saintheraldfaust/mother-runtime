@@ -27,7 +27,9 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
   and bounded artifact evidence.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
-- `tui`: read-only Ratatui dashboard, background IPC polling and bounded list pagination.
+- `tui`: Ratatui dashboard, background IPC polling, selected-task details and bounded list pagination.
+- `tui/forms`: bounded project/task/run forms with explicit submission and retry identities.
+- `tui/actions`: IPC mutations and owned CLI supervisor handles; regression and simulated-terminal checks passed.
 - `onboarding` (binary module): explicit background startup and non-destructive project-local Codex MCP setup.
 - `main`: Clap command grammar, supervisor and JSON presentation.
 
@@ -117,3 +119,15 @@ request workspace-write sandboxing, ignore user configuration, retain host-manag
 authentication, disable worker MCP servers and discard raw provider output. The TUI
 and setup client use the same IPC boundary; only the service writes canonical state.
 See [ADR 0010](DECISIONS/0010-codex-and-terminal-dashboard.md).
+
+The current terminal-action changes add typed project/task mutations, readiness
+transitions and Codex launch/stop controls. These operations execute outside the
+terminal event loop and retain the canonical writer. The TUI only signals its owned
+supervisor children; it cannot acquire signal authority from database PIDs. See
+[ADR 0011](DECISIONS/0011-terminal-actions.md). Regression and simulated-terminal checks passed; real-host validation is pending.
+
+Schema 11 expands task-contract JSON to textual outcomes plus optional file constraints
+without rewriting existing rows, handoffs or retry responses. Runtime file checks
+operate only on constraints or bounded discovered paths; they cannot verify behavioral
+criteria or complete a task with an empty contract. See
+[ADR 0012](DECISIONS/0012-outcome-driven-tasks.md).

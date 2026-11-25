@@ -1,10 +1,12 @@
 {
   "project_id": "PROJECT_ID",
-  "title": "Verify the README artifact",
-  "objective": "Record that the repository README exists and checkpoint its contents",
+  "title": "Build a product landing page",
+  "objective": "Build a responsive product landing page. Choose the implementation files and structure appropriate for this repository.",
   "source": "cli-session",
   "acceptance_criteria": [
-    {"path": "README.md", "expected_sha256": null}
+    "Includes navigation, a hero, product features and a footer",
+    "Adapts to mobile and desktop screen sizes",
+    "Primary calls to action are keyboard accessible"
   ],
   "dependencies": [],
   "review_required": false,

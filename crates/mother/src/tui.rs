@@ -1,10 +1,13 @@
-//! Read-only live dashboard. All state is obtained through the canonical IPC service.
+//! Live dashboard with owner-invoked forms and supervised execution controls.
+mod actions;
+mod forms;
 use crate::{
     Error, Result,
     protocol::{Operation, PROTOCOL_VERSION, Request},
     runtime,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use forms::{Form, Kind};
 use ratatui::{
     Frame, Terminal,
     backend::TestBackend,
@@ -19,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 const TABS: [&str; 7] = [
     "Overview",
@@ -42,13 +45,21 @@ struct Snapshot {
     handoffs: Vec<Value>,
     accounts: Vec<Value>,
     activity: Vec<Value>,
+    task_detail: Value,
     project: usize,
     error: Option<String>,
     refreshed: String,
 }
 
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Selection {
+    project: usize,
+    project_id: Option<String>,
+    task_id: Option<String>,
+}
+
 async fn call(dir: &Path, operation: Operation) -> Result<Value> {
-    let response = runtime::call(
+    call_request(
         dir,
         &Request {
             version: PROTOCOL_VERSION,
@@ -56,9 +67,19 @@ async fn call(dir: &Path, operation: Operation) -> Result<Value> {
             operation,
         },
     )
-    .await?;
+    .await
+}
+
+async fn call_request(dir: &Path, request: &Request) -> Result<Value> {
+    let response = runtime::call(dir, request).await?;
     if let Some(error) = response.error {
-        return Err(Error::Unavailable(error.message));
+        return Err(match error.code.as_str() {
+            "invalid_request" => Error::Invalid(error.message),
+            "conflict" => Error::Conflict(error.message),
+            "not_found" => Error::NotFound(error.message),
+            "integrity_error" => Error::Integrity(error.message),
+            _ => Error::Unavailable(error.message),
+        });
     }
     response
         .result
@@ -79,10 +100,19 @@ async fn pages(dir: &Path, operation: impl Fn(u64) -> Operation) -> Result<Vec<V
     Ok(items)
 }
 
-async fn snapshot(dir: &Path, project: usize) -> Result<Snapshot> {
+async fn snapshot(dir: &Path, selection: &Selection) -> Result<Snapshot> {
     let health = call(dir, Operation::Health).await?;
     let projects = pages(dir, |after| Operation::ProjectsList { after, limit: 100 }).await?;
-    let project = project.min(projects.len().saturating_sub(1));
+    let project = selection
+        .project_id
+        .as_ref()
+        .and_then(|id| {
+            projects
+                .iter()
+                .position(|p| p["id"].as_str() == Some(id.as_str()))
+        })
+        .unwrap_or(selection.project)
+        .min(projects.len().saturating_sub(1));
     let id = projects
         .get(project)
         .and_then(|p| p["id"].as_str())
@@ -102,6 +132,20 @@ async fn snapshot(dir: &Path, project: usize) -> Result<Snapshot> {
             limit: 100,
         })
         .await?;
+        if let Some(task_id) = selection
+            .task_id
+            .as_deref()
+            .or_else(|| data.tasks.first().and_then(|t| t["id"].as_str()))
+            && data.tasks.iter().any(|t| t["id"] == task_id)
+        {
+            data.task_detail = call(
+                dir,
+                Operation::TaskGet {
+                    task_id: task_id.into(),
+                },
+            )
+            .await?;
+        }
         data.handoffs = pages(dir, |after| Operation::HandoffsList {
             project_id: id.clone(),
             after,
@@ -140,6 +184,13 @@ async fn snapshot(dir: &Path, project: usize) -> Result<Snapshot> {
     data.workers.reverse();
     data.activity.reverse();
     Ok(data)
+}
+
+fn clean(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .take(8192)
+        .collect()
 }
 
 fn field(value: &Value, name: &str) -> String {
@@ -193,6 +244,19 @@ fn worker_detail(worker: &Value) -> Vec<Line<'static>> {
                 format!("{} · {}", field(item, "path"), field(item, "status")),
             ));
             lines.push(heading("SHA-256", field(item, "sha256")));
+        }
+    }
+    if let Some(artifacts) = worker["result"]["discovered_artifacts"].as_array() {
+        for artifact in artifacts.iter().take(16) {
+            lines.push(heading(
+                "Discovered file",
+                format!(
+                    "{} · {}",
+                    field(artifact, "path"),
+                    field(artifact, "status")
+                ),
+            ));
+            lines.push(heading("SHA-256", field(artifact, "sha256")));
         }
     }
     lines.extend([
@@ -287,10 +351,12 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
             Line::raw(""),
             Line::styled("Get started", Style::default().fg(Color::Cyan)),
             Line::raw("motherctl setup-codex     Connect this project to Codex"),
-            Line::raw("motherctl tasks --help    Create and manage a task"),
-            Line::raw("motherctl workers run --adapter codex --task <id> --worker-label codex"),
+            Line::raw("Describe a task objective and acceptance criteria, then mark it ready."),
+            Line::raw("Start Codex from Tasks. Inspect retained output in Workers."),
             Line::raw(""),
-            Line::raw("This first dashboard is read-only. Use Codex MCP or CLI to change state."),
+            Line::raw(
+                "a Register project · n Create task · t Mark ready · r Start Codex · s Stop owned worker",
+            ),
         ];
         if let Some(worker) = data.workers.first() {
             lines.push(Line::raw(""));
@@ -350,10 +416,13 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
             columns[0],
             &mut state,
         );
-        let item = items
+        let mut item = items
             .get(selected.min(items.len().saturating_sub(1)))
             .cloned()
             .unwrap_or(Value::Null);
+        if tab == 1 && data.task_detail["id"] == item["id"] && !item.is_null() {
+            item = data.task_detail.clone();
+        }
         let mut lines = if item.is_null() {
             vec![
                 Line::raw("No records yet."),
@@ -363,7 +432,14 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
             worker_detail(&item)
         } else {
             let keys: &[&str] = match tab {
-                1 => &["title", "id", "state", "task_revision", "updated_at"],
+                1 => &[
+                    "title",
+                    "id",
+                    "objective",
+                    "state",
+                    "task_revision",
+                    "updated_at",
+                ],
                 3 => &["name", "id", "role", "status", "revision"],
                 4 => &["id", "objective", "source", "created_at", "sha256"],
                 5 => &["login", "id", "status", "persona_id", "verified_at"],
@@ -381,6 +457,26 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
                 .map(|key| heading(key, field(&item, key)))
                 .collect()
         };
+        if tab == 1 {
+            if let Some(criteria) = item["outcome_criteria"].as_array() {
+                for criterion in criteria {
+                    if let Some(text) = criterion.as_str() {
+                        lines.push(heading("Acceptance", clean(text)));
+                    }
+                }
+                if !criteria.is_empty() {
+                    lines.push(Line::styled(
+                        "Behavioral criteria: verification pending",
+                        Style::default().fg(Color::Yellow),
+                    ));
+                }
+            }
+            if let Some(constraints) = item["artifact_constraints"].as_array() {
+                for constraint in constraints {
+                    lines.push(heading("File constraint", field(constraint, "path")));
+                }
+            }
+        }
         if tab == 1
             && let Some(worker) = data.workers.iter().find(|w| w["task_id"] == item["id"])
         {
@@ -396,10 +492,10 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
         );
     }
     let footer = if let Some(error) = &data.error {
-        format!(" {error} · q quit")
+        format!(" {} · q quit", clean(error))
     } else {
         format!(
-            " Tab/←/→ views · ↑/↓ select · j/k scroll · p project · q quit | {}",
+            " a project · n task · t ready · r run · s stop | Tab views · p switch project · q quit | {}",
             data.refreshed
         )
     };
@@ -414,7 +510,7 @@ fn draw(frame: &mut Frame, data: &Snapshot, tab: usize, selected: usize, scroll:
 }
 
 pub async fn run(dir: PathBuf, once: bool) -> Result<()> {
-    let first = snapshot(&dir, 0).await?;
+    let first = snapshot(&dir, &Selection::default()).await?;
     if once {
         let backend = TestBackend::new(120, 35);
         let mut terminal = Terminal::new(backend).unwrap_or_else(|never| match never {});
@@ -434,11 +530,14 @@ pub async fn run(dir: PathBuf, once: bool) -> Result<()> {
         ));
     }
     let (tx, rx) = watch::channel(first);
-    let (project_tx, mut project_rx) = watch::channel(0usize);
+    let (project_tx, mut project_rx) = watch::channel(Selection::default());
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+    let action_task = tokio::spawn(actions::serve(dir.clone(), command_rx, feedback_tx));
     let poll = tokio::spawn(async move {
         loop {
-            let project = *project_rx.borrow_and_update();
-            match snapshot(&dir, project).await {
+            let selection = project_rx.borrow_and_update().clone();
+            match snapshot(&dir, &selection).await {
                 Ok(data) => {
                     if tx.send(data).is_err() {
                         break;
@@ -454,74 +553,292 @@ pub async fn run(dir: PathBuf, once: bool) -> Result<()> {
             tokio::select! {_=tokio::time::sleep(Duration::from_secs(1))=>{}, changed=project_rx.changed()=>{if changed.is_err(){break;}}}
         }
     });
-    let result = tokio::task::spawn_blocking(move || interactive(rx, project_tx))
-        .await
-        .map_err(|e| Error::Unavailable(e.to_string()))?;
+    let result =
+        tokio::task::spawn_blocking(move || interactive(rx, project_tx, command_tx, feedback_rx))
+            .await
+            .map_err(|e| Error::Unavailable(e.to_string()))?;
     poll.abort();
+    let _ = action_task.await;
     result
 }
 
-fn interactive(rx: watch::Receiver<Snapshot>, project_tx: watch::Sender<usize>) -> Result<()> {
+fn selected_task(data: &Snapshot, tab: usize, selected: usize) -> Option<Value> {
+    if tab == 1 {
+        data.tasks.get(selected).cloned()
+    } else {
+        None
+    }
+}
+
+fn interactive(
+    rx: watch::Receiver<Snapshot>,
+    project_tx: watch::Sender<Selection>,
+    command_tx: mpsc::Sender<actions::CommandRequest>,
+    mut feedback: mpsc::UnboundedReceiver<actions::Feedback>,
+) -> Result<()> {
+    use crossterm::{
+        event::{DisableBracketedPaste, EnableBracketedPaste},
+        execute,
+    };
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
+            let _ = execute!(io::stdout(), DisableBracketedPaste);
             ratatui::restore();
         }
     }
     let mut terminal = ratatui::init();
     let _restore = Restore;
+    execute!(io::stdout(), EnableBracketedPaste)?;
     let (mut tab, mut selected, mut scroll) = (0, 0usize, 0u16);
+    let mut form: Option<Form> = None;
+    let mut notice = String::new();
+    let mut focus_task: Option<String> = None;
+    let mut requested_project: Option<String> = None;
     loop {
+        while let Ok(update) = feedback.try_recv() {
+            let matches = form
+                .as_ref()
+                .is_some_and(|f| update.id.as_deref() == Some(f.id.as_str()));
+            match update.result {
+                Ok(effect) => {
+                    notice = effect.message;
+                    if let Some(id) = effect.project_id {
+                        requested_project = Some(id);
+                        selected = 0;
+                        tab = 0;
+                    }
+                    if update.id.is_some()
+                        && let Some(id) = effect.task_id
+                    {
+                        focus_task = Some(id);
+                        tab = 1;
+                        scroll = 0;
+                    }
+                    if matches {
+                        form = None;
+                    }
+                }
+                Err(error) => {
+                    notice = error.to_string();
+                    if matches && let Some(form) = &mut form {
+                        form.pending = false;
+                        form.error = Some(error.to_string());
+                    }
+                }
+            }
+        }
         let data = rx.borrow().clone();
-        terminal.draw(|frame| draw(frame, &data, tab, selected, scroll))?;
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
+        if let Some(id) = requested_project.take() {
+            let _ = project_tx.send(Selection {
+                project: 0,
+                project_id: Some(id),
+                task_id: None,
+            });
+        }
+        if tab == 1
+            && let Some(id) = &focus_task
+            && let Some(index) = data
+                .tasks
+                .iter()
+                .position(|t| t["id"].as_str() == Some(id.as_str()))
         {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => break,
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                KeyCode::Tab | KeyCode::Right => {
-                    tab = (tab + 1) % TABS.len();
-                    selected = 0;
-                    scroll = 0;
-                }
-                KeyCode::BackTab | KeyCode::Left => {
-                    tab = (tab + TABS.len() - 1) % TABS.len();
-                    selected = 0;
-                    scroll = 0;
-                }
-                KeyCode::Char(c @ '1'..='7') => {
-                    tab = (c as usize) - ('1' as usize);
-                    selected = 0;
-                    scroll = 0;
-                }
-                KeyCode::Down => {
-                    let count = match tab {
-                        1 => data.tasks.len(),
-                        2 => data.workers.len(),
-                        3 => data.personas.len(),
-                        4 => data.handoffs.len(),
-                        5 => data.accounts.len(),
-                        6 => data.activity.len(),
-                        _ => 0,
-                    };
-                    selected = (selected + 1).min(count.saturating_sub(1));
-                    scroll = 0;
-                }
-                KeyCode::Up => {
-                    selected = selected.saturating_sub(1);
-                    scroll = 0;
-                }
-                KeyCode::Char('j') => scroll = scroll.saturating_add(1),
-                KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
-                KeyCode::Char('p') => {
-                    let _ = project_tx.send((data.project + 1) % data.projects.len().max(1));
-                    selected = 0;
-                    scroll = 0;
+            selected = index;
+            focus_task = None;
+        }
+        terminal.draw(|frame| {
+            draw(frame, &data, tab, selected, scroll);
+            if !notice.is_empty() {
+                let area = frame.area();
+                frame.render_widget(
+                    Paragraph::new(clean(&notice)).style(Style::default().fg(Color::Yellow)),
+                    ratatui::layout::Rect::new(
+                        area.x,
+                        area.bottom().saturating_sub(1),
+                        area.width,
+                        1,
+                    ),
+                );
+            }
+            if let Some(form) = &form {
+                form.render(frame);
+            }
+        })?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let event = event::read()?;
+        if let Some(dialog) = &mut form {
+            match event {
+                Event::Paste(text) => dialog.paste(&text),
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if (key.code == KeyCode::Esc
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)))
+                        && !dialog.pending
+                    {
+                        form = None;
+                        continue;
+                    }
+                    if dialog.submit_key(key) {
+                        if matches!(dialog.kind, Kind::Quit) {
+                            break;
+                        }
+                        match dialog.command() {
+                            Ok(command) => match command_tx.try_send(command) {
+                                Ok(()) => {
+                                    dialog.pending = true;
+                                    dialog.error = None;
+                                }
+                                Err(_) => {
+                                    dialog.error =
+                                        Some("action queue unavailable; try again".into())
+                                }
+                            },
+                            Err(error) => dialog.error = Some(error.to_string()),
+                        }
+                    } else {
+                        dialog.key(key);
+                    }
                 }
                 _ => {}
             }
+            continue;
+        }
+        let Event::Key(key) = event else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        let opening_action = matches!(key.code, KeyCode::Char('a' | 'n' | 't' | 'r'));
+        if opening_action && data.error.is_some() {
+            notice = "Runtime is unavailable; wait for reconnection before changing state.".into();
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => form = Some(Form::quit()),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                form = Some(Form::quit())
+            }
+            KeyCode::Char('a') => form = Some(Form::project()),
+            KeyCode::Char('n') => {
+                if let Some(project) = data.projects.get(data.project) {
+                    if let Some(id) = project["id"].as_str() {
+                        form = Some(Form::task(id.into(), field(project, "name")));
+                    }
+                } else {
+                    notice = "Register a project with a before creating a task.".into();
+                }
+            }
+            KeyCode::Char('t' | 'r') => {
+                if let Some(task) = selected_task(&data, tab, selected) {
+                    let id = task["id"].as_str().unwrap_or_default().to_owned();
+                    let revision = task["task_revision"].as_u64().unwrap_or_default();
+                    if key.code == KeyCode::Char('t') {
+                        match serde_json::from_value::<crate::tasks::TaskState>(
+                            task["state"].clone(),
+                        ) {
+                            Ok(state) => {
+                                match Form::ready(id, revision, state, field(&task, "title")) {
+                                    Ok(dialog) => form = Some(dialog),
+                                    Err(error) => notice = error.to_string(),
+                                }
+                            }
+                            Err(_) => notice = "Cannot read the selected task state.".into(),
+                        }
+                    } else if task["state"] == "ready" {
+                        form = Some(Form::run(id, revision, field(&task, "title")));
+                    } else {
+                        notice =
+                            "Select a ready task, or press t to prepare an eligible task first."
+                                .into();
+                    }
+                } else {
+                    notice = "Select a task in Tasks first.".into();
+                }
+            }
+            KeyCode::Char('s') => {
+                let worker = if tab == 2 {
+                    data.workers.get(selected)
+                } else {
+                    selected_task(&data, tab, selected).and_then(|task| {
+                        data.workers
+                            .iter()
+                            .find(|w| w["task_id"] == task["id"] && w["active"] == true)
+                    })
+                };
+                if let Some(worker) = worker.filter(|w| w["process"]["status"] == "running") {
+                    form = Some(Form::stop(field(worker, "worker_label")));
+                } else {
+                    notice = "Select a running worker to request a stop.".into();
+                }
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                tab = (tab + 1) % TABS.len();
+                selected = 0;
+                scroll = 0;
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                tab = (tab + TABS.len() - 1) % TABS.len();
+                selected = 0;
+                scroll = 0;
+            }
+            KeyCode::Char(c @ '1'..='7') => {
+                tab = (c as usize) - ('1' as usize);
+                selected = 0;
+                scroll = 0;
+            }
+            KeyCode::Down => {
+                let count = match tab {
+                    1 => data.tasks.len(),
+                    2 => data.workers.len(),
+                    3 => data.personas.len(),
+                    4 => data.handoffs.len(),
+                    5 => data.accounts.len(),
+                    6 => data.activity.len(),
+                    _ => 0,
+                };
+                selected = (selected + 1).min(count.saturating_sub(1));
+                scroll = 0;
+            }
+            KeyCode::Up => {
+                selected = selected.saturating_sub(1);
+                scroll = 0;
+            }
+            KeyCode::Char('j') => scroll = scroll.saturating_add(1),
+            KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
+            KeyCode::Char('p') => {
+                let index = (data.project + 1) % data.projects.len().max(1);
+                let _ = project_tx.send(Selection {
+                    project: index,
+                    project_id: data
+                        .projects
+                        .get(index)
+                        .and_then(|p| p["id"].as_str())
+                        .map(str::to_owned),
+                    task_id: None,
+                });
+                selected = 0;
+                scroll = 0;
+                focus_task = None;
+            }
+            _ => {}
+        }
+        if tab == 1 {
+            let task_id = data
+                .tasks
+                .get(selected)
+                .and_then(|t| t["id"].as_str())
+                .map(str::to_owned);
+            project_tx.send_if_modified(|selection| {
+                if selection.task_id != task_id {
+                    selection.task_id = task_id;
+                    true
+                } else {
+                    false
+                }
+            });
         }
     }
     Ok(())

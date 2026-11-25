@@ -29,7 +29,8 @@ VS Code session has reloaded its tools.
 
 ## Run a Codex worker
 
-Create a task using `motherctl tasks create --file FILE` (see
+Describe the objective and optional behavioral acceptance criteria; Codex chooses
+implementation filenames. Create a task using `motherctl tasks create --file FILE` (see
 [the task contract example](../examples/task.json)), then explicitly transition it
 through `triaged` to `ready` using the current task revision at each step.
 
@@ -83,3 +84,15 @@ over MCP. This establishes a small authenticated CLI execution/MCP path on macOS
 It does not certify an interactive VS Code reload, cross-provider continuation,
 large engineering jobs, hostile-code isolation or a general autonomous workflow.
 Raw operational records and local configuration remain private.
+
+## Terminal execution controls in development
+
+The current TUI changes add project registration, task forms, readiness confirmation
+and Codex launch/stop controls. The launch form uses the same supervisor, host login,
+worktree and usage limits described above. Regression and simulated-terminal checks pass; real VS Code validation is
+pending. See [TUI workflow](TUI.md); the previous verified dashboard was read-only.
+
+Worker prompts request repository inspection and a brief implementation plan before
+editing. Optional known-file constraints are included separately from behavioral
+criteria. Discovered files and their runtime observations appear in Workers even
+when no paths were supplied at task creation. These do not verify acceptance criteria.

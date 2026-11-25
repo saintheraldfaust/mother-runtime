@@ -90,6 +90,47 @@ pub struct ArtifactCriterion {
     pub expected_sha256: Option<String>,
 }
 
+/// Desired behavior, with compatibility for the original file-only contract format.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum AcceptanceCriterion {
+    /// A user-visible result to verify; recording it does not establish success.
+    Outcome(String),
+    /// Legacy file contract. New callers should use artifact_constraints instead.
+    File(ArtifactCriterion),
+}
+
+impl From<ArtifactCriterion> for AcceptanceCriterion {
+    fn from(value: ArtifactCriterion) -> Self {
+        Self::File(value)
+    }
+}
+
+/// File constraints are a projection of the one persisted task contract, not a second registry.
+pub fn file_constraints(task: &serde_json::Value) -> crate::Result<Vec<ArtifactCriterion>> {
+    let criteria: Vec<AcceptanceCriterion> =
+        serde_json::from_value(task["acceptance_criteria"].clone())?;
+    Ok(criteria
+        .into_iter()
+        .filter_map(|criterion| match criterion {
+            AcceptanceCriterion::File(file) => Some(file),
+            _ => None,
+        })
+        .collect())
+}
+
+pub fn outcome_criteria(task: &serde_json::Value) -> crate::Result<Vec<String>> {
+    let criteria: Vec<AcceptanceCriterion> =
+        serde_json::from_value(task["acceptance_criteria"].clone())?;
+    Ok(criteria
+        .into_iter()
+        .filter_map(|criterion| match criterion {
+            AcceptanceCriterion::Outcome(outcome) => Some(outcome),
+            _ => None,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskInput {
@@ -97,7 +138,12 @@ pub struct TaskInput {
     pub title: String,
     pub objective: String,
     pub source: String,
-    pub acceptance_criteria: Vec<ArtifactCriterion>,
+    /// Desired results in plain language. Filenames are not required.
+    #[serde(default)]
+    pub acceptance_criteria: Vec<AcceptanceCriterion>,
+    /// Optional advanced constraints for known files; never inferred user requirements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_constraints: Vec<ArtifactCriterion>,
     #[serde(default)]
     pub dependencies: Vec<String>,
     #[serde(default)]

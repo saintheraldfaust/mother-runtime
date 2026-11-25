@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 mod continuity;
 mod github;
 mod personas;
@@ -70,6 +70,10 @@ impl Store {
             }
             if version < 10 {
                 transaction.execute_batch(include_str!("../migrations/010_codex_adapter.sql"))?;
+            }
+            if version < 11 {
+                transaction
+                    .execute_batch(include_str!("../migrations/011_outcome_criteria.sql"))?;
             }
             transaction.commit()?;
         }
@@ -192,7 +196,7 @@ fn apply(tx: &Transaction<'_>, request: &Request, dir: Option<&Path>) -> Result<
             let projects: i64 = tx.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?;
             Ok(
                 json!({"status":"ok", "schema_version":SCHEMA_VERSION, "protocol_version":PROTOCOL_VERSION,
-                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"mock_codex_and_opencode_cli", "provider_workers_supported":true, "provider_credentials_stored":false, "provider_credentials_brokered":false, "provider_budget_enforcement":true, "provider_budget_basis":"provider_reported_cost_and_steps", "provider_spend_independently_metered":false, "worker_process_supervision":true, "worker_supervision_scope":"owner_run_cli", "worker_worktree_isolation":true, "worker_project_repository_mutation":"not_guaranteed", "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
+                "sqlite_version":rusqlite::version(), "projects":projects, "workers_supported":true, "worker_adapter":"mock_codex_and_opencode_cli", "provider_workers_supported":true, "provider_credentials_stored":false, "provider_credentials_brokered":false, "provider_budget_enforcement":true, "provider_budget_basis":"provider_reported_cost_and_steps", "provider_spend_independently_metered":false, "worker_process_supervision":true, "worker_supervision_scope":"owner_run_cli", "worker_worktree_isolation":true, "worker_project_repository_mutation":"not_guaranteed", "execution_leases_supported":true, "mcp_supported":true,"host_tracked_tasks_supported":true,"task_outcome_criteria_supported":true,"task_file_constraints_optional":true,"personas_supported":true,"persona_enforcement":"optional_assertion","github_identity_records_supported":true,"github_credential_storage":false,"github_operations":"read_only_verification"}),
             )
         }
         Operation::ProjectAttach { name, repository } => {
@@ -1241,5 +1245,58 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(eligible["items"], json!([]));
+    }
+    #[test]
+    fn schema_ten_upgrade_preserves_legacy_task_contracts_and_retry_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::config::initialize(dir.path()).unwrap();
+        let _lock = crate::config::lock(dir.path()).unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let project = store
+            .execute(&request(Operation::ProjectAttach {
+                name: "Legacy".into(),
+                repository: dir.path().to_str().unwrap().into(),
+            }))
+            .unwrap();
+        let legacy:Request=serde_json::from_value(json!({"version":PROTOCOL_VERSION,"request_id":"legacy-task-retry","operation":{"method":"task_create","params":{"project_id":project["id"],"title":"Existing file task","objective":"Preserve existing contract","source":"legacy","acceptance_criteria":[{"path":"README.md","expected_sha256":null}],"dependencies":[],"review_required":false,"expected_project_revision":null}}})).unwrap();
+        let mut response = store.execute(&legacy).unwrap();
+        for key in [
+            "artifact_constraints",
+            "outcome_criteria",
+            "outcomes_verified",
+        ] {
+            response.as_object_mut().unwrap().remove(key);
+        }
+        store
+            .connection
+            .execute(
+                "UPDATE idempotency SET response=?1 WHERE request_id='legacy-task-retry'",
+                [serde_json::to_string(&response).unwrap()],
+            )
+            .unwrap();
+        store
+            .connection
+            .pragma_update(None, "user_version", 10)
+            .unwrap();
+        drop(store);
+        let mut upgraded = Store::open(dir.path()).unwrap();
+        assert_eq!(upgraded.execute(&legacy).unwrap(), response);
+        let task = upgraded
+            .execute(&request(Operation::TaskGet {
+                task_id: response["id"].as_str().unwrap().into(),
+            }))
+            .unwrap();
+        assert_eq!(
+            task["acceptance_criteria"],
+            json!([{"path":"README.md","expected_sha256":null}])
+        );
+        assert_eq!(task["artifact_constraints"][0]["path"], "README.md");
+        assert!(task["outcome_criteria"].as_array().unwrap().is_empty());
+        assert_eq!(
+            upgraded.execute(&request(Operation::Health)).unwrap()["schema_version"],
+            SCHEMA_VERSION
+        );
     }
 }

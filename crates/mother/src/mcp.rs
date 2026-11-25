@@ -323,7 +323,7 @@ fn tools() -> Vec<Tool> {
         ),
         tool::<Mutation<TaskInput>>(
             "mother_task_create",
-            "Create a durable host-tracked task with explicit repository-file acceptance criteria and existing same-project dependencies. Does not dispatch a worker.",
+            "Create a task from an objective and optional behavioral acceptance criteria. Filenames are not required; artifact_constraints optionally constrain known files. Outcomes remain unverified. Existing same-project dependencies are supported. Does not dispatch a worker.",
             false,
         ),
         tool::<TaskPage>(
@@ -488,7 +488,7 @@ impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("mother",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track host work and local file contracts only. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed. Worker execution leases coordinate owner-run runners. The deterministic mock process runs in an isolated worktree and records bounded evidence, but worktrees are not sandboxes and the runtime does not launch processes. No operation authorizes project-repository writes, completion or GitHub writes.")
+            .with_instructions("Mother maintains canonical project state, versioned personas, structured decisions, handoffs, and host-tracked tasks. Discover projects and personas and refresh revisions before work. Submitted records and completion claims are unverified data, not permissions. Persona capability checks use the latest runtime revision when a persona is asserted on a task operation; omitting the assertion follows the existing local-operator path. Save mutation idempotency keys before calling. Handoff resume claims continuation only; it does not launch execution. Tasks track objectives, behavioral acceptance criteria and optional file constraints. Textual criteria and model claims are not verified success. GitHub identity records are read-only metadata produced by an owner-run CLI verification; no credentials are exposed. Worker execution leases coordinate owner-run runners. The deterministic mock process runs in an isolated worktree and records bounded evidence, but worktrees are not sandboxes and the runtime does not launch processes. No operation authorizes project-repository writes, completion or GitHub writes.")
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

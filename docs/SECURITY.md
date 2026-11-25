@@ -208,7 +208,27 @@ and reported usage cannot establish independent billing or preauthorization of e
 operation. Subscription dollar cost is null. Raw Codex messages, reasoning, command
 output and stderr are not retained by Mother. See [Codex details](CODEX.md).
 
-The first TUI is read-only, uses IPC and removes terminal control characters from
-submitted text. Setup edits only project-local MCP configuration and registers the
+The last verified TUI checkpoint was read-only, used IPC and removed terminal
+control characters from submitted text. The current action changes are described
+below and await runtime verification. Setup edits only project-local MCP configuration and registers the
 project through IPC. Generated configuration, runtime state, logs and retained
 worktrees remain private. Quitting the dashboard leaves the service running.
+
+### Terminal action controls
+
+Project/task forms use the existing local-operator IPC authority; they do not assert
+an authenticated persona or create another database writer. Task preparation and
+launch retain revision checks. Form retries reuse operation keys until edited.
+Stopping is limited to supervisor Child handles owned by the current dashboard;
+stored PIDs and worker labels alone cannot authorize signals. Supervisors handle
+termination requests, stop their worker group and record process/task outcomes.
+Detaching a dashboard leaves workers running. Cross-session stop authorization,
+automatic result integration and authenticated persona enforcement remain separate
+work. Regression and simulated-terminal checks pass; real-host validation remains pending.
+
+Outcome criteria are submitted requirements, never an authorization or verified result.
+The runtime rejects completion based on empty file evidence and rejects behavioral
+completion until an outcome verifier exists. Automatically discovered paths are
+bounded and read relative to the recorded worktree using the existing no-follow
+file reader. Reported Git paths identify candidate files; observations establish
+only point-in-time contents, not that the listing is complete or the task is correct.

@@ -4,8 +4,8 @@ use crate::{
     personas::Capability,
     protocol::Request,
     tasks::{
-        ArtifactCriterion, ArtifactObservation, CheckpointInput, TaskInput, TaskState,
-        TaskTransition,
+        AcceptanceCriterion, ArtifactCriterion, ArtifactObservation, CheckpointInput, TaskInput,
+        TaskState, TaskTransition,
     },
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -46,6 +46,9 @@ pub(super) fn get(tx: &Transaction<'_>, id: &str) -> Result<Value> {
         .query_map([id], |r| r.get::<_, String>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     value["dependencies"] = json!(dependencies);
+    value["artifact_constraints"] = json!(crate::tasks::file_constraints(&value)?);
+    value["outcome_criteria"] = json!(crate::tasks::outcome_criteria(&value)?);
+    value["outcomes_verified"] = json!(false);
     value["current_project_revision"] = json!(revision(tx, value["project_id"].as_str().unwrap())?);
     value["latest_checkpoint"] = if let Some(checkpoint) = value["latest_checkpoint_id"].as_str() {
         tx.query_row(
@@ -113,9 +116,9 @@ fn check_task(task: &Value, expected: u64) -> Result<i64> {
 }
 
 fn validate_criteria(criteria: &[ArtifactCriterion]) -> Result<()> {
-    if criteria.is_empty() || criteria.len() > 16 {
+    if criteria.len() > 16 {
         return Err(Error::Invalid(
-            "acceptance_criteria requires 1..=16 repository files".into(),
+            "artifact constraints support at most 16 repository files".into(),
         ));
     }
     let mut paths = HashSet::new();
@@ -144,7 +147,31 @@ pub(super) fn create(tx: &Transaction<'_>, request: &Request, input: &TaskInput)
     text(&input.title, "title", 256)?;
     text(&input.objective, "objective", 4096)?;
     text(&input.source, "source", 256)?;
-    validate_criteria(&input.acceptance_criteria)?;
+    let mut contract = input.acceptance_criteria.clone();
+    contract.extend(
+        input
+            .artifact_constraints
+            .iter()
+            .cloned()
+            .map(AcceptanceCriterion::File),
+    );
+    let mut files = Vec::new();
+    let mut outcomes = 0;
+    for criterion in &contract {
+        match criterion {
+            AcceptanceCriterion::Outcome(outcome) => {
+                text(outcome, "acceptance criterion", 1024)?;
+                outcomes += 1;
+            }
+            AcceptanceCriterion::File(file) => files.push(file.clone()),
+        }
+    }
+    if outcomes > 16 {
+        return Err(Error::Invalid(
+            "acceptance_criteria supports at most 16 textual outcomes".into(),
+        ));
+    }
+    validate_criteria(&files)?;
     if let Some(claim) = &input.persona {
         super::personas::authorize(tx, claim, Capability::TaskCreate, &input.project_id)?;
     }
@@ -167,7 +194,7 @@ pub(super) fn create(tx: &Transaction<'_>, request: &Request, input: &TaskInput)
     let next = advance_project(tx, &input.project_id, input.expected_project_revision)?;
     let id = Uuid::new_v4().to_string();
     tx.execute("INSERT INTO tasks(id,project_id,title,objective,source,acceptance_criteria,review_required,state,revision,project_revision) VALUES(?1,?2,?3,?4,?5,?6,?7,'created',1,?8)",
-        params![id,input.project_id,input.title,input.objective,input.source,serde_json::to_string(&input.acceptance_criteria)?,input.review_required,next])?;
+        params![id,input.project_id,input.title,input.objective,input.source,serde_json::to_string(&contract)?,input.review_required,next])?;
     for dependency in &input.dependencies {
         tx.execute(
             "INSERT INTO task_dependencies(task_id,dependency_id,project_id) VALUES(?1,?2,?3)",
@@ -195,8 +222,7 @@ fn repository(tx: &Transaction<'_>, task: &Value) -> Result<String> {
 }
 
 fn observations(tx: &Transaction<'_>, task: &Value) -> Result<Vec<ArtifactObservation>> {
-    let criteria: Vec<ArtifactCriterion> =
-        serde_json::from_value(task["acceptance_criteria"].clone())?;
+    let criteria = crate::tasks::file_constraints(task)?;
     Ok(evidence::observe(
         Path::new(&repository(tx, task)?),
         &criteria,
@@ -259,6 +285,12 @@ pub(super) fn checkpoint(
 }
 
 fn completion(tx: &Transaction<'_>, task: &Value) -> Result<Value> {
+    if !crate::tasks::outcome_criteria(task)?.is_empty() {
+        return Err(Error::Conflict("behavioral acceptance criteria require outcome verification; file existence and model claims cannot complete this task".into()));
+    }
+    if crate::tasks::file_constraints(task)?.is_empty() {
+        return Err(Error::Conflict("completion requires verified evidence; an empty file contract cannot establish success".into()));
+    }
     if task["review_required"] == true {
         return Err(Error::Conflict(
             "review-gated completion requires a review verifier, which is not implemented".into(),
@@ -451,7 +483,8 @@ mod tests {
             title: "Create artifact".into(),
             objective: "Produce the declared file".into(),
             source: "test".into(),
-            acceptance_criteria: vec![ArtifactCriterion {
+            acceptance_criteria: vec![],
+            artifact_constraints: vec![ArtifactCriterion {
                 path: "artifact".into(),
                 expected_sha256: Some(evidence::sha256(b"finished")),
             }],
@@ -644,7 +677,7 @@ mod tests {
         ));
         for path in ["../outside", "/absolute", "a//b", "a/./b"] {
             let mut bad = input(&project);
-            bad.acceptance_criteria[0].path = path.into();
+            bad.artifact_constraints[0].path = path.into();
             assert!(store.execute(&request(Operation::TaskCreate(bad))).is_err());
         }
         std::fs::write(dir.path().join("artifact"), b"finished").unwrap();
@@ -735,5 +768,84 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.execute(&checkpoint).unwrap(), task);
+    }
+    #[test]
+    fn outcome_and_objective_only_tasks_need_no_filenames_and_cannot_complete_on_empty_evidence() {
+        let (dir, _lock, mut store, project) = fixture();
+        std::fs::write(dir.path().join("artifact"), b"finished").unwrap();
+        for mode in 0..3 {
+            let mut submission:TaskInput=serde_json::from_value(json!({"project_id":project,"title":"Landing page","objective":"Build a responsive landing page","source":"test"})).unwrap();
+            if mode > 0 {
+                submission.acceptance_criteria =
+                    vec![AcceptanceCriterion::Outcome("Works on mobile".into())];
+            }
+            if mode == 2 {
+                submission.artifact_constraints = input(&project).artifact_constraints;
+            }
+            let created = store
+                .execute(&request(Operation::TaskCreate(submission)))
+                .unwrap();
+            assert_eq!(created["outcomes_verified"], false);
+            if mode < 2 {
+                assert!(
+                    created["artifact_constraints"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            let validating = validate(&mut store, created);
+            let checkpointed = store
+                .execute(&request(Operation::TaskCheckpoint(checkpoint_input(
+                    &validating,
+                ))))
+                .unwrap();
+            if mode == 2 {
+                assert_eq!(
+                    checkpointed["latest_checkpoint"]["artifacts"][0]["status"],
+                    "matched"
+                );
+            }
+            let complete = request(Operation::TaskTransition(move_to(
+                &checkpointed,
+                TaskState::Completed,
+            )));
+            assert!(matches!(store.execute(&complete), Err(Error::Conflict(_))));
+            let unchanged = store
+                .execute(&request(Operation::TaskGet {
+                    task_id: checkpointed["id"].as_str().unwrap().into(),
+                }))
+                .unwrap();
+            assert_eq!(unchanged["state"], "validating");
+            assert_eq!(unchanged["task_revision"], checkpointed["task_revision"]);
+            assert_eq!(unchanged["completion_evidence"], Value::Null);
+        }
+    }
+
+    #[test]
+    fn textual_criteria_and_combined_file_constraints_are_bounded_and_validated() {
+        let (_dir, _lock, mut store, project) = fixture();
+        let mut submission = input(&project);
+        for outcomes in [
+            vec![AcceptanceCriterion::Outcome(" ".into())],
+            vec![AcceptanceCriterion::Outcome("x".repeat(1025))],
+            vec![AcceptanceCriterion::Outcome("Outcome".into()); 17],
+        ] {
+            submission.acceptance_criteria = outcomes;
+            assert!(
+                store
+                    .execute(&request(Operation::TaskCreate(submission.clone())))
+                    .is_err()
+            );
+        }
+        submission.acceptance_criteria = vec![AcceptanceCriterion::File(
+            submission.artifact_constraints[0].clone(),
+        )];
+        assert!(
+            store
+                .execute(&request(Operation::TaskCreate(submission)))
+                .is_err(),
+            "duplicates across legacy and advanced constraints must reject"
+        );
     }
 }

@@ -2517,3 +2517,303 @@ fn codex_project_setup_preserves_configuration_and_rejects_conflicts() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), conflicting);
     runtime.stop();
 }
+
+#[test]
+fn supervised_launch_revision_and_operator_stop_preserve_task_state() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut runtime = Runtime::start(&dir);
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_repository(&repo);
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "Controlled workers",
+            "--repository",
+            repo.to_str().unwrap(),
+        ],
+    );
+    let task_id = create_ready_task(
+        &dir,
+        temp.path(),
+        project["result"]["id"].as_str().unwrap(),
+        "Controlled execution",
+    );
+    let before = success(&dir, &["tasks", "inspect", "--task", &task_id]);
+    let revision = before["result"]["task_revision"].as_u64().unwrap();
+    let stale = command(
+        &dir,
+        &[
+            "workers",
+            "run",
+            "--task",
+            &task_id,
+            "--worker-label",
+            "stale-confirmation",
+            "--expected-task-revision",
+            &(revision - 1).to_string(),
+        ],
+    );
+    assert!(!stale.status.success());
+    assert!(
+        success(&dir, &["workers", "list"])["result"]["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let mut supervisor = Command::new(env!("CARGO_BIN_EXE_motherctl"))
+        .arg("--data-dir")
+        .arg(&dir)
+        .arg("--json")
+        .args([
+            "workers",
+            "run",
+            "--task",
+            &task_id,
+            "--worker-label",
+            "controlled",
+            "--expected-task-revision",
+            &revision.to_string(),
+            "--helper-delay-ms",
+            "10000",
+            "--timeout-seconds",
+            "30",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let workers = success(&dir, &["workers", "list"]);
+        if workers["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["process"]["status"] == "running")
+        {
+            break;
+        }
+        assert!(
+            supervisor.try_wait().unwrap().is_none(),
+            "supervisor exited before attachment"
+        );
+        assert!(Instant::now() < deadline, "worker attachment timed out");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        unsafe { libc::kill(supervisor.id() as i32, libc::SIGTERM) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while supervisor.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "supervisor did not stop");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = supervisor.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let worker = &value["result"];
+    assert_eq!(worker["process"]["status"], "killed");
+    assert_eq!(worker["task_state"], "failed");
+    assert_eq!(worker["result"]["completion"], false);
+    assert_eq!(worker["active"], false);
+    assert!(Path::new(worker["workspace"]["path"].as_str().unwrap()).is_dir());
+    assert_eq!(
+        success(&dir, &["tasks", "inspect", "--task", &task_id])["result"]["state"],
+        "failed"
+    );
+    runtime.stop();
+}
+
+#[test]
+fn outcome_task_worker_discovers_files_without_user_predictions_and_survives_restart() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut runtime = Runtime::start(&dir);
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_repository(&repo);
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "Outcome project",
+            "--repository",
+            repo.to_str().unwrap(),
+        ],
+    );
+    let submission = serde_json::json!({"project_id":project["result"]["id"],"title":"Build a landing page","objective":"Build a responsive product landing page; choose its implementation files","source":"test","acceptance_criteria":["Includes navigation and a footer","Works on mobile"]});
+    let contract = temp.path().join("outcome-task.json");
+    std::fs::write(&contract, serde_json::to_vec(&submission).unwrap()).unwrap();
+    let mut task = success(
+        &dir,
+        &[
+            "--request-id",
+            "outcome-create",
+            "tasks",
+            "create",
+            "--file",
+            contract.to_str().unwrap(),
+        ],
+    )["result"]
+        .clone();
+    let task_id = task["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        task["acceptance_criteria"],
+        submission["acceptance_criteria"]
+    );
+    assert!(task["artifact_constraints"].as_array().unwrap().is_empty());
+    for state in ["triaged", "ready"] {
+        task = success(
+            &dir,
+            &[
+                "tasks",
+                "transition",
+                "--task",
+                &task_id,
+                "--state",
+                state,
+                "--source",
+                "test",
+                "--reason",
+                "Prepare outcome task",
+                "--expected-task-revision",
+                &task["task_revision"].as_u64().unwrap().to_string(),
+            ],
+        )["result"]
+            .clone();
+    }
+    let codex = temp.path().join("codex-outcome");
+    std::fs::write(&codex,r#"#!/bin/sh
+last=
+for argument do last="$argument"; done
+case "$last" in *'Works on mobile'*) ;; *) exit 41;; esac
+case "$last" in *'Choose the files and structure'*) ;; *) exit 42;; esac
+printf '%s\n' '{"type":"thread.started","thread_id":"outcome-fixture"}'
+mkdir -p site
+printf '<h1>Product</h1>\n' > site/index.html
+printf 'body { margin: 0; }\n' > site/styles.css
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"All acceptance criteria passed"}}'
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":8}}'
+"#).unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let run = success_with_env(
+        &dir,
+        &[
+            "workers",
+            "run",
+            "--adapter",
+            "codex",
+            "--task",
+            &task_id,
+            "--worker-label",
+            "outcome-codex",
+            "--timeout-seconds",
+            "10",
+        ],
+        &[("MOTHER_CODEX_BIN", codex.to_str().unwrap())],
+    );
+    let worker = &run["result"];
+    assert_eq!(worker["task_state"], "awaiting_input");
+    assert_eq!(worker["result"]["completion"], false);
+    assert_eq!(worker["result"]["outcomes_verified"], false);
+    assert!(worker["process"]["evidence"].as_array().unwrap().is_empty());
+    let discovered = worker["result"]["discovered_artifacts"].as_array().unwrap();
+    assert_eq!(discovered.len(), 2);
+    assert!(
+        discovered
+            .iter()
+            .any(|file| file["path"] == "site/index.html"
+                && file["status"] == "present"
+                && file["sha256"].as_str().unwrap().len() == 64)
+    );
+    assert!(!repo.join("site/index.html").exists());
+    let execution_id = worker["id"].as_str().unwrap().to_owned();
+    runtime.stop();
+    drop(runtime);
+    let mut restarted = Runtime::start(&dir);
+    let persisted = success(&dir, &["workers", "inspect", "--execution", &execution_id]);
+    assert_eq!(
+        persisted["result"]["result"]["discovered_artifacts"],
+        worker["result"]["discovered_artifacts"]
+    );
+    let task = success(&dir, &["tasks", "inspect", "--task", &task_id]);
+    assert_eq!(
+        task["result"]["outcome_criteria"],
+        submission["acceptance_criteria"]
+    );
+    assert_eq!(task["result"]["outcomes_verified"], false);
+    restarted.stop();
+}
+
+#[tokio::test]
+async fn outcome_and_objective_only_tasks_round_trip_across_mcp_clients_and_restart() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut service = Runtime::start(&dir);
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "MCP outcomes",
+            "--repository",
+            temp.path().to_str().unwrap(),
+        ],
+    );
+    let a = mcp_client(&dir, false).await;
+    let b = mcp_client(&dir, true).await;
+    let args = serde_json::json!({"idempotency_key":"mcp-outcome-task","input":{"project_id":project["result"]["id"],"title":"Landing page","objective":"Build the requested landing page and choose its files","source":"mcp-test","acceptance_criteria":["Works on mobile","Includes a contact form"]}});
+    let created = tool(&a, "mother_task_create", args.clone()).await;
+    assert_eq!(created.is_error, Some(false));
+    let created = created.structured_content.unwrap();
+    let id = created["result"]["id"].as_str().unwrap();
+    assert!(
+        created["result"]["artifact_constraints"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        tool(&b, "mother_task_create", args.clone())
+            .await
+            .structured_content
+            .unwrap(),
+        created
+    );
+    let objective_only=tool(&b,"mother_task_create",serde_json::json!({"idempotency_key":"mcp-objective-task","input":{"project_id":project["result"]["id"],"title":"Explore implementation","objective":"Inspect the repository and propose an approach","source":"mcp-test"}})).await;
+    assert_eq!(objective_only.is_error, Some(false));
+    service.crash();
+    drop(service);
+    let mut restarted = Runtime::start(&dir);
+    let recovered = tool(&b, "mother_task_get", serde_json::json!({"task_id":id}))
+        .await
+        .structured_content
+        .unwrap();
+    assert_eq!(
+        recovered["result"]["outcome_criteria"],
+        serde_json::json!(["Works on mobile", "Includes a contact form"])
+    );
+    assert_eq!(recovered["result"]["outcomes_verified"], false);
+    assert_eq!(
+        tool(&a, "mother_task_create", args)
+            .await
+            .structured_content
+            .unwrap(),
+        created
+    );
+    a.cancel().await.unwrap();
+    b.cancel().await.unwrap();
+    restarted.stop();
+}

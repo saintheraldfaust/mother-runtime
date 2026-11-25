@@ -1,15 +1,15 @@
 format_version = 1
 updated_on = "2026-11-25"
 directive = "MOTHER.md"
-milestone = "Codex host-login worker execution, real artifact/MCP verification, project-local setup and live read-only Ratatui dashboard"
-next_objective = "Add governed task creation and execution controls to the TUI, then worker test-evidence reconciliation and stronger isolation; keep GitHub writes and credential brokering separate"
+milestone = "Outcome-driven task intake, optional file constraints, discovered artifact evidence and terminal project/task/Codex execution controls"
+next_objective = "Exercise the outcome-driven project workflow in VS Code, then implement outcome/test-evidence reconciliation and stronger isolation"
 
 [implemented]
 cargo_workspace = true
 motherctl_cli = true
 strict_versioned_toml = true
 structured_errors_and_logging = true
-sqlite_migrations_v1_through_v10 = true
+sqlite_migrations_v1_through_v11 = true
 host_tracked_task_contracts = true
 explicit_task_state_machine = true
 immutable_task_checkpoints_and_transition_history = true
@@ -73,7 +73,13 @@ worker_mcp_read_tools = true
 codex_cli_provider_adapter = true
 codex_project_mcp_setup = true
 explicit_background_start = true
-read_only_ratatui_dashboard = true
+ratatui_dashboard = true
+tui_project_registration = true
+tui_task_creation_and_readiness = true
+tui_codex_launch_and_owned_stop = true
+outcome_driven_task_intake = true
+optional_file_constraints = true
+discovered_worker_artifacts = true
 codex_raw_output_discarded = true
 codex_subscription_token_accounting = true
 opencode_cli_provider_adapter = true
@@ -84,10 +90,11 @@ provider_repository_mutation_claim = "not_guaranteed"
 provider_credentials_host_managed = true
 
 [verification]
+scope = "Current terminal-action changes: 49 unit and 22 process tests passed; scripted PTY workflow passed with a fake Codex executable; real VS Code project workflow pending"
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 43
-process_integration_tests = 19
+unit_tests = 49
+process_integration_tests = 22
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
@@ -202,7 +209,7 @@ later = ["Credential broker and GitHub write/repository scopes", "Real GitHub ac
 [limitations]
 trust_boundary = "Same OS user; all current clients have local operator authority"
 context_trust = "Submitted summaries, objectives, labels, tests and references remain unverified; task file observations alone are runtime-generated"
-task_completion = "Declared local file contract only; no test execution, independent review, human approval or general correctness verification"
+task_completion = "Explicit file-only contracts retain local file verification; objective-only or behavioral tasks cannot complete without appropriate verified evidence; no test runner, independent review or human approval verifier"
 file_observations = "Point-in-time individual files, not an atomic filesystem snapshot or hostile same-UID sandbox"
 handoff_resume = "Local operator coordination claim only; no execution, authority grant, lease, or reassignment"
 worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises mock, Codex or optional OpenCode processes"
@@ -244,6 +251,58 @@ real_codex_cli_mcp_health_and_projects = true
 codex_uses_existing_chatgpt_login = true
 vscode_project_config_installed_locally = true
 vscode_reload_verified = false
-tui_scope = "Read-only live IPC dashboard; task and worker mutations use MCP/CLI"
+tui_scope = "IPC project/task mutations and owned CLI Codex start/stop controls; no independent database writer"
 security_advisory_exception = "RUSTSEC-2026-0543 maintenance-only owner exception expires 2026-12-20"
 private_master_modified = false
+
+[in_progress.tui_actions]
+status = "regression_and_simulated_terminal_workflow_passed"
+project_registration_form = true
+task_creation_and_dependency_form = true
+task_readiness_confirmation = true
+revision_checked_codex_launch = true
+owned_supervisor_stop_control = true
+graceful_supervisor_signal_handling = true
+stable_form_retry_keys = true
+selected_task_objective = true
+quit_detaches_supervisors = true
+all_targets_compile_check_passed = true
+strict_clippy_passed = true
+runtime_tests_executed = true
+interactive_workflow_verified = "scripted_pty_with_fake_codex"
+new_real_provider_calls = false
+publication = "publication_checks_passed"
+pending = ["Verify the real landing-page workflow in VS Code", "Verify active-worker detachment and cross-session stop rejection", "Run publication checks before commit/push"]
+
+[tui_verification_2026_11_25]
+workspace_unit_tests_passed = 49
+workspace_process_tests_passed = 22
+binary_rebuilt = true
+pty_project_registration = true
+pty_task_creation_and_readiness = true
+pty_empty_git_head_rejected_without_lease = true
+pty_same_form_retry_after_initial_commit = true
+pty_fake_codex_execution_and_retained_evidence = true
+pty_owned_worker_stop = true
+pty_quit_leaves_service_running = true
+provider_used_for_pty = "local_fake_codex_executable_no_model_call"
+real_vscode_landing_page_workflow = "pending_owner_exercise"
+
+[outcome_driven_tasks_2026_11_25]
+objective_only_intake = true
+textual_acceptance_criteria = true
+file_constraints_optional_and_advanced = true
+legacy_contracts_and_retries_preserved = true
+worker_prompt_requests_repository_inspection_and_plan = true
+bounded_discovered_file_observations = true
+empty_file_evidence_cannot_complete = true
+behavioral_criteria_require_verifier = true
+behavioral_verification_implemented = false
+workspace_tests_passed = 71
+real_provider_calls_for_this_change = false
+
+[local_runtime_upgrade_2026_11_25]
+schema = 11
+private_backup_created = true
+prior_active_execution_finished_before_restart = true
+existing_record_counts_preserved = true

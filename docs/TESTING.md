@@ -9,7 +9,7 @@ cargo test --workspace --locked
 cargo deny --locked check
 ```
 
-The suite contains 43 unit tests and nineteen process integration tests.
+The current suite passes 49 unit tests and twenty-two process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -173,3 +173,29 @@ Interactive cross-provider continuity, mandatory authentication, credential brok
 worker test execution, independent review, hostile-code isolation and representative
 performance testing remain pending. The CI workflow requests macOS/Linux checks;
 this milestone's hosted results must be checked after publication.
+
+## Terminal action verification
+
+New regression cases cover task-form project binding and retry keys, multiline and
+Unicode editing, stale launch rejection before lease acquisition, and graceful
+SIGTERM termination with durable killed/failed state. The updated workspace suite passes all 71 tests.
+
+A scripted PTY exercise passed project registration, task creation, readiness,
+empty-HEAD rejection without a lease, retry after an initial commit, fake Codex
+execution with retained file evidence, owned-worker stopping and quit confirmation
+while leaving the service running. This uses a local fixture, not a model call.
+Active-worker detachment, cross-session stop rejection and the real landing-page
+workflow in VS Code remain pending. Publication checks must pass before a push.
+No new real-provider call or browser test has been performed during this slice.
+
+Outcome-driven task coverage verifies omitted filename/criteria fields, textual
+requirement validation, optional/legacy file contracts, rejection of empty-evidence
+and behavioral completion, schema-10 preservation of task data and exact retry
+responses, worker-selected file observations and restart persistence. A fixture
+claiming all outcomes passed is not accepted as verification. Tests do not certify
+visual layout, accessibility, browsers or arbitrary behavioral outcomes.
+
+Two independent SDK MCP clients also create and replay outcome-driven tasks and
+objective-only tasks, then retrieve the same criteria after a real service restart.
+The updated scripted TUI workflow uses behavioral criteria without any file names;
+its fake worker's chosen files are discovered and observed independently.

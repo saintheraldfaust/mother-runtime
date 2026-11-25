@@ -162,6 +162,7 @@ impl Telemetry {
         budget_reason: Option<&str>,
         mut workspace_changes: Vec<Value>,
     ) -> Value {
+        let original_change_count = workspace_changes.len();
         while !workspace_changes.is_empty()
             && serde_json::to_vec(&workspace_changes)
                 .map_or(true, |value| value.len() > MAX_CHANGE_BYTES)
@@ -188,6 +189,7 @@ impl Telemetry {
             "budget_exceeded":budget_reason.is_some(),
             "budget_reason":budget_reason,
             "workspace_changes":workspace_changes,
+            "workspace_changes_may_be_truncated":original_change_count>=64 || workspace_changes.len()<original_change_count || workspace_changes.iter().any(|change|change["path_truncated"]==true),
             "worktree_mutation":!workspace_changes.is_empty()
         });
         if self.adapter.as_deref() == Some("codex") {

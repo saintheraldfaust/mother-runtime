@@ -1,0 +1,12 @@
+{
+  "project_id": "PROJECT_ID",
+  "title": "Check an existing README artifact",
+  "objective": "Observe the existing README file using the explicit file-contract verifier",
+  "source": "cli-session",
+  "artifact_constraints": [
+    {"path": "README.md", "expected_sha256": null}
+  ],
+  "dependencies": [],
+  "review_required": false,
+  "expected_project_revision": null
+}

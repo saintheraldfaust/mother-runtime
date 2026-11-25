@@ -13,6 +13,8 @@ external-source content, not automatically by its filename.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public — Public component boundaries, storage and IPC behavior; no operational records. |
 | [CODEX.md](CODEX.md) | Public — Public Codex setup, authentication boundary and sanitized verification scope; no operational records. |
 | [TUI.md](TUI.md) | Public — Public dashboard controls, live-read behavior and limits. |
+| [DECISIONS/0012-outcome-driven-tasks.md](DECISIONS/0012-outcome-driven-tasks.md) | Public — Public outcome-driven intake, legacy compatibility and file-evidence limits. |
+| [DECISIONS/0011-terminal-actions.md](DECISIONS/0011-terminal-actions.md) | Public — Public terminal action, revision, retry and owned-supervisor design; pending verification is explicit. |
 | [DECISIONS/0010-codex-and-terminal-dashboard.md](DECISIONS/0010-codex-and-terminal-dashboard.md) | Public — Public Codex adapter and dashboard architecture decision; no private source material. |
 | [CLI.md](CLI.md) | Public — Public command grammar and placeholder identifiers. |
 | [CONTINUITY.md](CONTINUITY.md) | Public — Public revision, snapshot and handoff semantics; no real project memory. |

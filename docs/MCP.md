@@ -42,7 +42,7 @@ fields are documented here but not yet constrained by separate output schemas.
 | `mother_handoffs_list` | `project_id`; optional `after`, `limit` | Handoff metadata, current project revision, cursor. |
 | `mother_handoff_get` | `handoff_id` | Package, exact JSON bytes, hash, current revision and claim. |
 | `mother_handoff_resume` | `idempotency_key`, nested `input: {handoff_id, recipient, expected_revision}` | One durable claim; no worker is launched. |
-| `mother_task_create` | `idempotency_key`, nested `TaskInput` | Host-tracked task contract, IDs and revisions. |
+| `mother_task_create` | `idempotency_key`, nested `TaskInput` | Objective and optional behavioral criteria; filenames are optional advanced constraints. Returns IDs and revisions. |
 | `mother_tasks_list` | `project_id`; optional `state`, `after`, `limit` | Task summaries and current project revision. |
 | `mother_task_get` | `task_id` | Task, latest checkpoint/transition, dependencies, limited evidence and active worker lease. |
 | `mother_task_transition` | `idempotency_key`, nested `TaskTransition`; optional `persona` claim | Allowed state update with task/project revision, evidence gates and current-persona capability checks. |
@@ -221,3 +221,9 @@ inside the trusted project. See [Codex setup](CODEX.md) for configuration scope,
 conflict handling and credential boundaries. On 2026-11-25, a real Codex CLI client
 successfully called health and project-list tools through the bridge. Interactive
 VS Code tool discovery still requires a session reload and has not been certified.
+
+Task intake accepts textual `acceptance_criteria` and optional `artifact_constraints`.
+Both may be omitted for an objective-only task. Legacy path objects in the criteria
+array remain supported. Behavioral criteria and discovered artifacts are never
+returned as verified acceptance merely because a worker exited successfully. See
+[task contracts](ORCHESTRATION.md) for compatibility and completion semantics.

@@ -872,9 +872,30 @@ pub(super) fn process_finish(
         ));
     }
     let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
-    let criteria: Vec<crate::tasks::ArtifactCriterion> =
-        serde_json::from_value(task["acceptance_criteria"].clone())?;
+    let criteria = crate::tasks::file_constraints(&task)?;
     let evidence = crate::evidence::observe(&current, &criteria);
+    // Paths are discovered by the supervisor's bounded Git observation, then files
+    // are independently read by the runtime with the usual anchored verifier.
+    let mut discovered = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(changes) = provider["workspace_changes"].as_array() {
+        for change in changes.iter().take(64) {
+            if change["path_truncated"] == true {
+                continue;
+            }
+            if let Some(path) = change["path"].as_str()
+                && crate::evidence::valid_path(path)
+                && seen.insert(path.to_owned())
+            {
+                discovered.push(crate::tasks::ArtifactCriterion {
+                    path: path.into(),
+                    expected_sha256: None,
+                });
+            }
+        }
+    }
+    let discovered_artifacts = crate::evidence::observe(&current, &discovered);
+
     let succeeded =
         input.outcome == WorkerProcessOutcome::Exited && input.exit_code.unwrap_or(0) == 0;
     let (source, success_reason, failure_reason) = if adapter != WorkerAdapter::Mock.as_str() {
@@ -934,6 +955,9 @@ pub(super) fn process_finish(
             .unwrap_or(Value::Null)
     };
     let result = json!({
+        "discovered_artifacts":discovered_artifacts,
+        "artifact_discovery_scope":"bounded_supervisor_git_paths_runtime_file_observations",
+        "outcomes_verified":false,
         "adapter":adapter,
         "outcome":input.outcome.as_str(),
         "exit_code":input.exit_code,
@@ -1253,7 +1277,8 @@ mod tests {
             title: title.into(),
             objective: "Exercise coordination leases".into(),
             source: "test".into(),
-            acceptance_criteria: vec![ArtifactCriterion {
+            acceptance_criteria: vec![],
+            artifact_constraints: vec![ArtifactCriterion {
                 path: "artifact".into(),
                 expected_sha256: Some(crate::evidence::sha256(b"finished")),
             }],
@@ -1514,7 +1539,7 @@ mod tests {
     fn supervised_process_uses_private_worktree_and_never_completes_the_task() {
         let (dir, _lock, mut store, project) = fixture();
         let mut input = task_input(&project, "Process work");
-        input.acceptance_criteria = vec![ArtifactCriterion {
+        input.artifact_constraints = vec![ArtifactCriterion {
             path: "worker-output.txt".into(),
             expected_sha256: None,
         }];
