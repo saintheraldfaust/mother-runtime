@@ -11,6 +11,9 @@ external-source content, not automatically by its filename.
 | Reviewed document | Classification and reason |
 | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public — Public component boundaries, storage and IPC behavior; no operational records. |
+| [CODEX.md](CODEX.md) | Public — Public Codex setup, authentication boundary and sanitized verification scope; no operational records. |
+| [TUI.md](TUI.md) | Public — Public dashboard controls, live-read behavior and limits. |
+| [DECISIONS/0010-codex-and-terminal-dashboard.md](DECISIONS/0010-codex-and-terminal-dashboard.md) | Public — Public Codex adapter and dashboard architecture decision; no private source material. |
 | [CLI.md](CLI.md) | Public — Public command grammar and placeholder identifiers. |
 | [CONTINUITY.md](CONTINUITY.md) | Public — Public revision, snapshot and handoff semantics; no real project memory. |
 | [DECISIONS/0001-local-runtime.md](DECISIONS/0001-local-runtime.md) | Public — Public architecture decision and tradeoffs. |

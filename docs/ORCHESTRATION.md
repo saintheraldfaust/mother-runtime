@@ -2,7 +2,7 @@
 
 Mother persists task contracts, dependency IDs, state transitions, checkpoints,
 narrowly scoped file evidence, durable worker execution leases, and owner-run
-supervised mock and OpenCode CLI processes. A task without a lease reports
+supervised mock, Codex and optional OpenCode CLI processes. A task without a lease reports
 `execution_mode: host_tracked` and null `worker_execution`; a leased task reports
 `worker_leased` plus its active execution. A `running` record still describes
 reported work, not proof of correctness or independent review. The mock helper runs
@@ -209,7 +209,7 @@ while it is alive, reaps remaining process-group members after exit, writes a
 bounded `worker.log`, and finalizes process evidence.
 
 The durable execution records the adapter selected at lease time. The default is
-`mock`; `--adapter opencode` selects the OpenCode CLI adapter.
+`mock`; `--adapter codex` uses the existing Codex login, and `--adapter opencode` selects the optional OpenCode CLI adapter.
 
 ```sh
 motherctl workers run --task TASK_ID --worker-label mock-a \
@@ -326,13 +326,11 @@ orphan reaper or cross-host process reconciliation. See
 
 ## Remaining execution work
 
-The mock and OpenCode adapters are implemented under the owner-run supervisor.
-Provider tests use a fake `opencode` executable; no real paid or authenticated model
-call has been certified. Sandbox isolation, independent spend metering, credential
-brokering, automatic retry, test execution, review verification, human approval and
-GitHub writes remain unimplemented. The deterministic mock process proves scheduling,
-checkpointing, bounded concurrency, lease recovery, restart persistence, owner-run
-process supervision, worktree checkout isolation, bounded logs/evidence and explicit
-cleanup. The OpenCode adapter adds adapter selection, bounded provider telemetry and
-cost/step/timeout cancellation, but not sandboxed or independently verified
-execution.
+The mock, Codex and optional OpenCode adapters use the owner-run supervisor.
+A small real Codex execution created a declared file with a matching SHA-256 on
+2026-11-25. OpenCode remains fake-tested. Codex requests its workspace-write sandbox;
+Mother does not independently certify hostile-code isolation or broker credentials.
+Independent spend metering, automatic retry, test execution, review verification,
+human approval and GitHub writes remain unimplemented. Successful workers leave
+tasks awaiting input rather than completed. See [Codex execution](CODEX.md) for
+subscription accounting, privacy and limit semantics, and [TUI](TUI.md) for live reads.

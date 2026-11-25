@@ -12,6 +12,7 @@ pub mod provider;
 pub mod runtime;
 pub mod store;
 pub mod tasks;
+pub mod tui;
 pub mod workers;
 
 #[derive(Debug, thiserror::Error)]

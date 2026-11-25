@@ -14,7 +14,7 @@ under a registered repository, subject to the verifier limits. There is no gener
 shell execution, credential broker, GitHub mutation, or arbitrary worker startup.
 Local IPC can manage persona and identity authorization records under the same
 OS-user trust boundary. The owner-run CLI alone may invoke one fixed `gh api user`
-identity-verification command and supervise the mock helper or OpenCode CLI adapter.
+identity-verification command and supervise the mock helper, Codex, or optional OpenCode CLI adapter.
 
 All local clients currently have operator-level access to all registered projects.
 Do not expose the socket through network forwarding or give untrusted processes
@@ -62,7 +62,7 @@ OS-user authority. The mock helper receives a cleared environment and a worktree
 is not enforced filesystem isolation. The worktree prevents concurrent-checkout
 collisions, not hostile access.
 
-The supervisor captures at most 64 KiB of stdout and stderr into a 0600 log, attaches
+For mock/OpenCode workers the supervisor captures at most 64 KiB of each output stream into a 0600 log. Codex output is discarded; only accounting/completion metadata is retained. It attaches
 the PID, heartbeats the lease, sends SIGTERM/SIGKILL to the process group on timeout
 or budget exhaustion, and records bounded observations of declared acceptance
 criteria. Successful exit moves a running task to `awaiting_input`; failure, timeout
@@ -195,3 +195,20 @@ checks remain active. Reevaluate the SDK/dependency replacement before expiry.
 The dependency check also reports both `syn` 2 and 3 through upstream procedural
 macros. This is a dependency-duplication warning, not a vulnerability advisory;
 their major-version APIs cannot be forcibly unified by this application.
+
+### Codex and dashboard boundary
+
+Codex workers request `workspace-write` sandboxing with approval policy `never`,
+ignore user configuration and receive no configured MCP servers. Host HOME and
+optional CODEX_HOME remain available for existing authentication. API-key and
+GitHub-token environment variables are excluded, but this is not account isolation
+or credential brokering. The installed Codex sandbox enforces its own policy;
+Mother's same-UID trust boundary and worktree limits remain. Event-based step limits
+and reported usage cannot establish independent billing or preauthorization of each
+operation. Subscription dollar cost is null. Raw Codex messages, reasoning, command
+output and stderr are not retained by Mother. See [Codex details](CODEX.md).
+
+The first TUI is read-only, uses IPC and removes terminal control characters from
+submitted text. Setup edits only project-local MCP configuration and registers the
+project through IPC. Generated configuration, runtime state, logs and retained
+worktrees remain private. Quitting the dashboard leaves the service running.

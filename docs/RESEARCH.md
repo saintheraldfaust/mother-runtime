@@ -37,7 +37,7 @@ credentials in its data database, so this adapter retains host `HOME` and the ho
 data store for an existing login while isolating OpenCode configuration. Provider
 tests use a fake executable; no authenticated or paid provider call is claimed.
 
-No other authentication or provider API is called by the implemented feature set.
+The later Codex slice below adds an authenticated host CLI path.
 Research those interfaces immediately before the relevant implementation rather
 than making unverified integration claims now.
 
@@ -57,3 +57,12 @@ O_NOFOLLOW traversal, regular-file checks, bounded reads, before/after metadata,
 and a final path recheck. macOS behavior is exercised by actual filesystem tests;
 Linux is requested in CI but has not been run locally. Observations are not an
 atomic filesystem snapshot and no shell/test/provider API is introduced.
+
+On 2026-11-25, inspected the installed Codex 0.171.0-alpha.13 CLI help and official
+[noninteractive execution](https://developers.openai.com/codex/noninteractive/) and
+[MCP configuration](https://developers.openai.com/codex/mcp/) documentation. Confirmed
+existing ChatGPT login through `codex login status`; no credential values were read
+or copied. A real worker created a matching file and a separate real client called
+Mother MCP. Project-local configuration was installed; interactive VS Code reload
+is not yet verified. [Ratatui 0.30.2](https://docs.rs/ratatui/latest/ratatui/) with
+Crossterm 0.29 supplies the dashboard and TestBackend rendering verification.

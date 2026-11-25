@@ -2329,3 +2329,191 @@ async fn github_identity_scenario() {
     client.cancel().await.ok();
     service.stop();
 }
+
+#[test]
+fn codex_supervisor_checks_flags_usage_failures_limits_and_private_output() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut runtime = Runtime::start(&dir);
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_repository(&repo);
+    let project = success(
+        &dir,
+        &[
+            "projects",
+            "attach",
+            "--name",
+            "Codex demo",
+            "--repository",
+            repo.to_str().unwrap(),
+        ],
+    );
+    let project_id = project["result"]["id"].as_str().unwrap();
+    for (name, tail, expected) in [
+        (
+            "Completed",
+            r#"printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":3,"output_tokens":5}}'"#,
+            "released",
+        ),
+        ("Missing completion", "true", "failed"),
+        (
+            "Failed turn",
+            r#"printf '%s\n' '{"type":"turn.failed","error":{"message":"private diagnostic"}}'"#,
+            "failed",
+        ),
+        (
+            "Tool limit",
+            r#"printf '%s\n' '{"type":"item.started","item":{"type":"command_execution"}}' '{"type":"item.started","item":{"type":"command_execution"}}' '{"type":"turn.completed","usage":{}}'"#,
+            "failed",
+        ),
+        ("Timeout", "sleep 10", "failed"),
+    ] {
+        let task_id = create_ready_task(&dir, temp.path(), project_id, name);
+        let script = temp.path().join("codex-helper");
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/bin/sh
+[ -z "$OPENAI_API_KEY$CODEX_API_KEY$GH_TOKEN$GITHUB_TOKEN" ] || exit 40
+[ "$HOME" != "$PWD" ] || exit 41
+[ "$1" = exec ] || exit 42
+shift
+ignore=; ephemeral=; json=; sandbox=; approvals=; provider=; mcp=; cwd=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --ignore-user-config) ignore=1; shift ;;
+    --ephemeral) ephemeral=1; shift ;;
+    --json) json=1; shift ;;
+    --sandbox) [ "$2" = workspace-write ] || exit 43; sandbox=1; shift 2 ;;
+    -c) case "$2" in
+      'approval_policy="never"') approvals=1 ;;
+      'model_provider="openai"') provider=1 ;;
+      'mcp_servers={{}}') mcp=1 ;;
+      *) exit 44 ;;
+      esac; shift 2 ;;
+    -C) [ "$2" -ef . ] || exit 45; cwd=1; shift 2 ;;
+    --model) shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$ignore$ephemeral$json$sandbox$approvals$provider$mcp$cwd" = 11111111 ] || exit 46
+printf '%s\n' '{{"type":"thread.started","thread_id":"thread-demo"}}'
+printf '%s\n' '{{"type":"item.completed","item":{{"type":"reasoning","text":"private reasoning"}}}}'
+printf 'Codex artifact\n' > worker-output.txt
+printf '%s\n' 'private stderr' >&2
+{tail}
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let run = success_with_env(
+            &dir,
+            &[
+                "workers",
+                "run",
+                "--adapter",
+                "codex",
+                "--task",
+                &task_id,
+                "--worker-label",
+                "codex",
+                "--timeout-seconds",
+                if name == "Timeout" { "2" } else { "10" },
+                "--max-steps",
+                "1",
+            ],
+            &[
+                ("MOTHER_CODEX_BIN", script.to_str().unwrap()),
+                ("OPENAI_API_KEY", "test-env-must-be-removed"),
+                ("GH_TOKEN", "test-env-must-be-removed"),
+            ],
+        );
+        let worker = &run["result"];
+        assert_eq!(worker["status"], expected, "scenario {name}: {worker}");
+        assert_eq!(worker["result"]["provider"]["adapter"], "codex");
+        assert_eq!(worker["result"]["provider"]["cost_usd"], Value::Null);
+        assert_eq!(worker["result"]["completion"], false);
+        assert!(!repo.join("worker-output.txt").exists());
+        let log = std::fs::read_to_string(worker["process"]["log_path"].as_str().unwrap()).unwrap();
+        assert!(!log.contains("private"));
+        assert!(!worker.to_string().contains("private reasoning"));
+        assert!(!worker.to_string().contains("private diagnostic"));
+        assert!(!worker.to_string().contains("private stderr"));
+        if name == "Completed" {
+            assert_eq!(worker["task_state"], "awaiting_input");
+            assert_eq!(worker["result"]["provider"]["tokens"]["input"], 10);
+            assert_eq!(worker["process"]["evidence"][0]["status"], "present");
+        }
+        if name == "Tool limit" {
+            assert_eq!(worker["result"]["provider"]["budget_reason"], "steps");
+        }
+        if name == "Timeout" {
+            assert_eq!(worker["result"]["provider"]["budget_reason"], "timeout");
+        }
+    }
+    let frame = command(&dir, &["ui", "--once"]);
+    assert!(
+        frame.status.success(),
+        "{}",
+        String::from_utf8_lossy(&frame.stderr)
+    );
+    let frame = String::from_utf8(frame.stdout).unwrap();
+    assert!(frame.contains("Codex demo"));
+    assert!(frame.contains("CONNECTED"));
+    runtime.stop();
+}
+
+#[test]
+fn codex_project_setup_preserves_configuration_and_rejects_conflicts() {
+    let temp = directory();
+    let dir = temp.path().join("data");
+    success(&dir, &["init"]);
+    let mut runtime = Runtime::start(&dir);
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let folder = repo.join(".codex");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let file = folder.join("config.toml");
+    std::fs::write(
+        &file,
+        "# Preserve this comment\nmodel = \"example-model\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let setup = || {
+        Command::new(env!("CARGO_BIN_EXE_motherctl"))
+            .arg("--data-dir")
+            .arg(&dir)
+            .arg("setup-codex")
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+    };
+    let first = setup();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let configured = std::fs::read_to_string(&file).unwrap();
+    assert!(configured.starts_with("# Preserve this comment\nmodel = \"example-model\"\n"));
+    assert!(configured.contains("[mcp_servers.mother]"));
+    assert!(setup().status.success());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), configured);
+    assert_eq!(
+        success(&dir, &["projects", "list"])["result"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let conflicting = configured.replace(env!("CARGO_BIN_EXE_motherctl"), "/other/motherctl");
+    std::fs::write(&file, &conflicting).unwrap();
+    assert!(!setup().status.success());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), conflicting);
+    runtime.stop();
+}

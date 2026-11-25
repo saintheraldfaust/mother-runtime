@@ -212,3 +212,12 @@ See [state graph, limits and evidence scope](ORCHESTRATION.md).
 HandoffInput now accepts optional `task_id`. New snapshots include task revisions
 and checkpoints; old immutable packages retain their original format. The task ID
 must belong to the handoff project. Task snapshots do not confer permissions.
+
+## Codex project setup
+
+`motherctl setup-codex` starts Mother, registers the current directory, and safely
+adds project-local `.codex/config.toml` settings. Reload the Codex VS Code session
+inside the trusted project. See [Codex setup](CODEX.md) for configuration scope,
+conflict handling and credential boundaries. On 2026-11-25, a real Codex CLI client
+successfully called health and project-list tools through the bridge. Interactive
+VS Code tool discovery still requires a session reload and has not been certified.

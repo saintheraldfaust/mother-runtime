@@ -8,6 +8,9 @@ intended for mutations. Only exact successful mutation replays are cached.
 | --- | --- |
 | `init` | Create configuration, initialize/migrate the database offline. Repeatable. |
 | `mcp` | Serve MCP stdio; forward operations to the existing runtime, without opening SQLite. |
+| `start` | Initialize private state if needed and start the canonical service in the background; reuse a reachable service. |
+| `setup-codex` | Start Mother, register the current project, and preserve/extend local Codex MCP configuration. |
+| `ui [--once]` | Open the read-only live dashboard, or print one overview frame; start Mother if needed. |
 | `serve` | Hold the writer lock and run the foreground local service. |
 | `doctor` | Report private-directory, configuration, schema/integrity, and runtime health. |
 | `status` | Retrieve health from the running service. |
@@ -34,11 +37,11 @@ intended for mutations. Only exact successful mutation replays are cached.
 | `workers list [--task ID] [--project ID] [--status STATUS] [--after N] [--limit N]` | Page through worker execution leases. |
 | `workers inspect --execution ID` | Read one lease, task state, expiry and coordination-only limits. |
 | `workers history --execution ID [--after N] [--limit N]` | Retrieve immutable lease, heartbeat, mock-checkpoint, release and expiry events. |
-| `workers lease --task ID --worker-label LABEL [--adapter mock\|opencode] [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease with a durable adapter selection; no process is launched. |
+| `workers lease --task ID --worker-label LABEL [--adapter mock\|codex\|opencode] [--lease-seconds N] [--max-active N] [--expected-task-revision N] [--expected-project-revision N]` | Acquire a durable coordination lease with a durable adapter selection; no process is launched. |
 | `workers heartbeat --execution ID --expected-revision N [--lease-seconds N]` | Extend an active lease from the current time. |
 | `workers mock --execution ID --expected-revision N --summary TEXT [--work-remaining TEXT] [--blocker TEXT]` | Write a deterministic mock checkpoint without editing files or completing the task. |
 | `workers release --execution ID --expected-revision N --outcome released\|failed\|completed [--summary TEXT]` | Record an execution outcome without changing task state; a running supervised process blocks release. |
-| `workers run --task ID --worker-label LABEL [--adapter mock\|opencode] [--model PROVIDER/MODEL] [--agent NAME] [--max-cost-usd N] [--max-steps N] [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, supervise the selected mock helper or OpenCode CLI process, and finalize evidence. The OpenCode adapter requires `--model` and positive `--max-cost-usd`. |
+| `workers run --task ID --worker-label LABEL [--adapter mock\|codex\|opencode] [--model PROVIDER/MODEL] [--agent NAME] [--max-cost-usd N] [--max-steps N] [--lease-seconds N] [--max-active N] [--timeout-seconds N] [--helper-delay-ms N] [--helper-exit-code N]` | Lease a ready task, create an isolated worktree, supervise the selected mock, Codex or OpenCode CLI process, and finalize evidence. Codex uses host login and optional `--model`, rejects dollar budgets and agent selection; OpenCode requires `--model` and positive `--max-cost-usd`. |
 | `workers abandon --execution ID [--force]` | Reconcile a crashed supervisor: mark a running process `lost`, block its task, and leave the worktree for explicit cleanup. Refuses while the recorded PID exists unless forced. |
 | `workers cleanup --execution ID` | Remove a retained non-active worktree, prune Git metadata, and mark the workspace removed. |
 | `workers recover` | Expire overdue leases; a task with a running supervised process becomes blocked instead of requeued. |
@@ -71,7 +74,7 @@ operational failures exit 1.
 `doctor` exits 1 if the service is stopped, even if offline checks pass. It does
 not fix permissions or create a missing database. `init` refuses to run against
 an active runtime. Use SIGINT/Ctrl-C or SIGTERM for graceful shutdown. There is
-no background installation, auto-start, or `launchd` integration yet.
+no login-time installation or `launchd` integration. `start`, `ui`, and `setup-codex` explicitly start the background service; quitting the TUI leaves it running.
 
 
 `mcp` reserves stdout exclusively for MCP JSON-RPC messages, including when
@@ -124,3 +127,5 @@ killed, `workers abandon` marks the process `lost` without signaling an unverifi
 PID; use `--force` only after confirming the recorded PID is gone or belongs to the
 abandoned helper. Retained worktrees require explicit `workers cleanup`. See
 [worker operations](ORCHESTRATION.md#worker-execution-leases).
+
+See [Codex setup and execution](CODEX.md) and [dashboard controls](TUI.md).

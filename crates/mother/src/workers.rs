@@ -81,6 +81,7 @@ pub enum WorkerAdapter {
     #[default]
     Mock,
     Opencode,
+    Codex,
 }
 
 impl WorkerAdapter {
@@ -88,6 +89,7 @@ impl WorkerAdapter {
         match self {
             Self::Mock => "mock",
             Self::Opencode => "opencode",
+            Self::Codex => "codex",
         }
     }
 }

@@ -9,7 +9,7 @@ cargo test --workspace --locked
 cargo deny --locked check
 ```
 
-The suite contains 41 unit tests and seventeen process integration tests.
+The suite contains 43 unit tests and nineteen process integration tests.
 Tests use temporary local directories and never touch real account credentials,
 remotes, or the default `~/.mother` installation.
 
@@ -50,7 +50,7 @@ Unit coverage:
   allowing the process finish to preserve expired status and evidence.
 - Abandonment marks a running process `lost`, blocks its task, records an immutable
   event, permits explicit worktree cleanup, and also blocks pre-process failures.
-- Provider metadata is accepted only for an OpenCode execution, required at
+- Provider metadata is accepted only for a provider execution, required at
   completion, bounded to 32 KiB, and used for worktree mutation reporting without
   claiming project-repository observation. Oversized workspace-change arrays are
   trimmed before that limit.
@@ -155,14 +155,21 @@ Persona process coverage:
   capability is revoked, both with the stale revision and with the current revision.
   Immutable persona history retains both revisions.
 
-Locally exercised on macOS with Rust 1.97.1. The checked-in CI workflow requests
-macOS and Linux validation; no hosted CI run is claimed. No interactive
-coding-assistant host, coding provider, mandatory-persona authorization, real GitHub
-account login, GitHub write, credential broker, remote workflow, real provider call,
-provider certification, sandbox isolation, worker-executed tests, performance target,
-power-loss, or hostile same-UID isolation test has been performed. Abandonment is
-explicit rather than an automatic reaper, and PID liveness/PID reuse cannot be
-certified. Mock process coverage uses a deterministic local helper. OpenCode adapter
-coverage uses a fake `opencode` executable, not a model provider; no paid or
-authenticated provider call is claimed. GitHub identity coverage uses a fake `gh`; it
-is not certification with a real account.
+Locally exercised on macOS with Rust 1.97.1. Automated Codex fixtures verify flags,
+environment exclusions, reported usage, matching file observations, missing/failed
+completion, tool-step and timeout termination, and exclusion of raw stdout/stderr
+from Mother logs. Setup tests preserve comments and settings, avoid duplicate
+registration and reject incompatible MCP configuration. TUI tests cover live IPC,
+worker details, narrow-terminal rendering and terminal control-character removal.
+Migration fixtures preserve execution graphs from both schema 8 and schema 9.
+
+On 2026-11-25, a separate owner-authorized real Codex worker using ChatGPT login
+created a declared artifact with a matching SHA-256. A real Codex CLI client also
+called Mother health/projects over MCP. These checks are outside the automated suite
+and establish a small real-provider path, not general correctness or interactive
+VS Code certification. OpenCode and GitHub identity coverage still uses fake
+executables; no real GitHub account certification or GitHub write is claimed.
+Interactive cross-provider continuity, mandatory authentication, credential brokering,
+worker test execution, independent review, hostile-code isolation and representative
+performance testing remain pending. The CI workflow requests macOS/Linux checks;
+this milestone's hosted results must be checked after publication.

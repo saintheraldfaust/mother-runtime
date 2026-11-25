@@ -1,15 +1,15 @@
 format_version = 1
-updated_on = "2026-11-24"
+updated_on = "2026-11-25"
 directive = "MOTHER.md"
-milestone = "Owner-run supervised mock and OpenCode CLI worker adapters with isolated Git worktrees, durable leases, explicit budgets, bounded telemetry and abandoned-process reconciliation"
-next_objective = "Certify the OpenCode adapter with an owner-authorized real model call and spend/termination checks, then strengthen isolation and test-evidence reconciliation; keep GitHub writes and credential brokering separate"
+milestone = "Codex host-login worker execution, real artifact/MCP verification, project-local setup and live read-only Ratatui dashboard"
+next_objective = "Add governed task creation and execution controls to the TUI, then worker test-evidence reconciliation and stronger isolation; keep GitHub writes and credential brokering separate"
 
 [implemented]
 cargo_workspace = true
 motherctl_cli = true
 strict_versioned_toml = true
 structured_errors_and_logging = true
-sqlite_migrations_v1_through_v9 = true
+sqlite_migrations_v1_through_v10 = true
 host_tracked_task_contracts = true
 explicit_task_state_machine = true
 immutable_task_checkpoints_and_transition_history = true
@@ -70,6 +70,12 @@ explicit_worktree_cleanup = true
 explicit_abandoned_process_reconciliation = true
 worker_process_lost_state = true
 worker_mcp_read_tools = true
+codex_cli_provider_adapter = true
+codex_project_mcp_setup = true
+explicit_background_start = true
+read_only_ratatui_dashboard = true
+codex_raw_output_discarded = true
+codex_subscription_token_accounting = true
 opencode_cli_provider_adapter = true
 provider_cost_step_and_timeout_budgets = true
 bounded_provider_telemetry = true
@@ -80,8 +86,8 @@ provider_credentials_host_managed = true
 [verification]
 platform = "macOS"
 rustc = "1.97.1"
-unit_tests = 41
-process_integration_tests = 17
+unit_tests = 43
+process_integration_tests = 19
 format_check_passed = true
 strict_clippy_passed = true
 workspace_tests_passed = true
@@ -136,6 +142,10 @@ coverage = [
   "An over-budget OpenCode process that exits before the next polling interval is still recorded as failed",
   "Expired leases recover assigned/running tasks and leases survive runtime restart",
   "MCP worker reads and the execution resource agree with CLI state",
+  "Schema 8 and 9 execution graphs survive migration to schema 10 with Codex leases",
+  "Codex fixture verifies flags, environment exclusions, usage, missing/failed completion, limits and raw-output privacy",
+  "Codex setup preserves comments/settings, is repeatable and rejects incompatible Mother config",
+  "Live TUI IPC snapshot and TestBackend worker rendering at normal/narrow sizes",
 ]
 hosted_ci_executed = false
 linux_executed = false
@@ -143,7 +153,10 @@ mcp_client_tested = true
 mcp_sdk_version = "3.11.0"
 mcp_protocols_tested = ["2025-11-25", "2026-07-28"]
 interactive_host_tested = false
-real_provider_tested = false
+real_provider_tested = true
+real_provider_scope = "One real Codex text artifact matched its declared SHA-256; existing ChatGPT login on macOS"
+real_codex_cli_mcp_tested = true
+real_codex_vscode_session_tested = false
 real_github_tested = false
 real_client_cross_assistant_tested = false
 real_github_account_verified = false
@@ -180,11 +193,11 @@ not_implemented = [
 ]
 
 [remaining]
-phase_2 = ["Background lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
+phase_2 = ["Login-time lifecycle/launchd integration", "Additional domain entities as vertical slices require"]
 phase_3 = ["Interactive Codex/Claude Code/Copilot session certification", "Persona change notification/refresh certification", "Per-operation typed result schemas beyond the response envelope"]
 phase_4 = ["Persona/policy/repository-base scopes in execution snapshots", "Verified test/review evidence and human-approval records", "Decision deprecation and unresolved-conflict handling", "Handoff execution ownership/leases separate from readable history"]
-phase_7_execution = ["Real OpenCode provider certification and spend/termination checks", "Sandbox isolation and cancellation across hosts", "Test execution and evidence reconciliation", "Automatic retry and independent review gates"]
-later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Identity-safe Git operations and credential brokering", "GitHub workflow with independent review", "Ratatui", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
+phase_7_execution = ["Optional OpenCode real-provider certification (deferred; owner uses Codex)", "Sandbox isolation and cancellation across hosts", "Test execution and evidence reconciliation", "Automatic retry and independent review gates"]
+later = ["Credential broker and GitHub write/repository scopes", "Real GitHub account certification", "Mandatory authenticated persona assertions", "Identity-safe Git operations and credential brokering", "GitHub workflow with independent review", "Governed task/execution controls in the read-only Ratatui dashboard", "Backups/exports/retention", "Competitive analysis before optional features", "Release preparation"]
 
 [limitations]
 trust_boundary = "Same OS user; all current clients have local operator authority"
@@ -192,8 +205,8 @@ context_trust = "Submitted summaries, objectives, labels, tests and references r
 task_completion = "Declared local file contract only; no test execution, independent review, human approval or general correctness verification"
 file_observations = "Point-in-time individual files, not an atomic filesystem snapshot or hostile same-UID sandbox"
 handoff_resume = "Local operator coordination claim only; no execution, authority grant, lease, or reassignment"
-worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises the mock helper or OpenCode process"
-worker_execution = "Mock helper or OpenCode CLI process in an isolated Git worktree; provider tests use a fake executable, cost/step budgets are provider-reported, project-repository mutation is not verified for OpenCode, and no test execution, completion, sandbox or independent review exists"
+worker_leases = "Coordination metadata only; not an OS lock, sandbox, identity proof or write authorization; only the owner-run CLI supervises mock, Codex or optional OpenCode processes"
+worker_execution = "Mock, Codex or optional OpenCode CLI in a detached worktree; one real Codex artifact path verified, Codex requests workspace-write sandbox and reports subscription tokens, event limits are not independent metering, no auto-completion, test execution or independent review"
 worker_recovery = "Explicit owner-run abandonment marks a stale running process lost; no signal is sent, PID liveness can be reused, and no automatic orphan reaper exists"
 snapshot_scopes = "Project, context, decisions, host-tracked tasks and latest checkpoints; persona/policy/verified Git scopes unavailable"
 secret_redaction = false
@@ -210,8 +223,8 @@ worker_supervision_scope = "owner_run_cli"
 worker_recovery_scope = "explicit_owner_cli"
 worktree_isolation = true
 worktree_isolation_scope = "checkout_only_not_sandbox"
-worker_adapter = "mock_and_opencode_cli_owner_run"
-worker_project_repository_mutation = "mock_false_opencode_not_guaranteed"
+worker_adapter = "mock_codex_and_opencode_cli_owner_run"
+worker_project_repository_mutation = "mock_false_provider_not_guaranteed"
 provider_credentials_brokered = false
 provider_spend_independently_metered = false
 scheduling_implemented = true
@@ -224,3 +237,13 @@ github_writes_implemented = false
 real_github_account_verified = false
 remote_writes_performed = false
 license = "Apache-2.0"
+
+[milestone_2026_11_25]
+real_codex_worker_artifact_hash_matched = true
+real_codex_cli_mcp_health_and_projects = true
+codex_uses_existing_chatgpt_login = true
+vscode_project_config_installed_locally = true
+vscode_reload_verified = false
+tui_scope = "Read-only live IPC dashboard; task and worker mutations use MCP/CLI"
+security_advisory_exception = "RUSTSEC-2026-0543 maintenance-only owner exception expires 2026-12-20"
+private_master_modified = false

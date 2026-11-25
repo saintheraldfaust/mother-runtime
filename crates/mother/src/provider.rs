@@ -1,4 +1,4 @@
-//! Bounded telemetry from the owner-run OpenCode CLI adapter.
+//! Bounded accounting telemetry from owner-run provider CLI adapters.
 //!
 //! OpenCode emits newline-delimited JSON with `run --format json`. Mother keeps
 //! only provider-reported accounting metadata and bounded errors; it never stores
@@ -20,6 +20,9 @@ const MAX_CHANGE_BYTES: usize = 12 * 1024;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Telemetry {
     pub session_id: Option<String>,
+    pub adapter: Option<String>,
+    pub completed: bool,
+    pub failed: bool,
     pub cost_usd: f64,
     pub tokens: Tokens,
     pub steps: u64,
@@ -51,6 +54,52 @@ impl Telemetry {
             && session.len() <= 128
         {
             self.session_id = Some(session.to_owned());
+        }
+        match value.get("type").and_then(Value::as_str) {
+            Some("thread.started") => {
+                self.adapter = Some("codex".into());
+                self.session_id = value
+                    .get("thread_id")
+                    .and_then(Value::as_str)
+                    .filter(|s| s.len() <= 128)
+                    .map(str::to_owned);
+            }
+            Some("turn.completed") => {
+                self.adapter = Some("codex".into());
+                self.completed = true;
+                self.steps += 1;
+                if let Some(usage) = value.get("usage") {
+                    self.tokens.input = self.tokens.input.saturating_add(
+                        usage
+                            .get("input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    );
+                    self.tokens.output = self.tokens.output.saturating_add(
+                        usage
+                            .get("output_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    );
+                    self.tokens.cache_read = self.tokens.cache_read.saturating_add(
+                        usage
+                            .get("cached_input_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    );
+                }
+            }
+            Some("turn.failed") => {
+                self.adapter = Some("codex".into());
+                self.failed = true;
+            }
+            Some("item.started")
+                if value["item"]["type"] == "command_execution"
+                    || value["item"]["type"] == "mcp_tool_call" =>
+            {
+                self.tool_calls += 1;
+            }
+            _ => {}
         }
         match value.get("type").and_then(Value::as_str) {
             Some("step_finish") => {
@@ -88,6 +137,9 @@ impl Telemetry {
             }
             Some("tool_use") => self.tool_calls += 1,
             Some("retry") => self.retries += 1,
+            Some("error") if self.adapter.as_deref() == Some("codex") => {
+                self.failed = true;
+            }
             Some("error") if self.errors.len() < MAX_ERRORS => {
                 let message = value
                     .get("error")
@@ -116,10 +168,10 @@ impl Telemetry {
         {
             workspace_changes.pop();
         }
-        json!({
-            "adapter":"opencode",
+        let mut value = json!({
+            "adapter":self.adapter.as_deref().unwrap_or("opencode"),
             "session_id":self.session_id,
-            "model":model,
+            "model":if model.is_empty(){Value::Null}else{json!(model)},
             "cost_usd":self.cost_usd,
             "tokens":self.tokens,
             "steps":self.steps,
@@ -137,7 +189,16 @@ impl Telemetry {
             "budget_reason":budget_reason,
             "workspace_changes":workspace_changes,
             "worktree_mutation":!workspace_changes.is_empty()
-        })
+        });
+        if self.adapter.as_deref() == Some("codex") {
+            value["cost_usd"] = Value::Null;
+            value["budget"]["max_cost_usd"] = Value::Null;
+            value["accounting_basis"] = json!("subscription_usage_not_dollar_metered");
+            value["sandbox"] = json!("workspace-write");
+            value["turn_completed"] = json!(self.completed);
+            value["turn_failed"] = json!(self.failed);
+        }
+        value
     }
 }
 
@@ -154,8 +215,23 @@ fn bounded(value: &str, limit: usize) -> String {
 
 /// Capture bounded raw output while parsing complete JSON lines into telemetry.
 pub fn monitor(
+    stream: impl Read + Send + 'static,
+    telemetry: Arc<Mutex<Telemetry>>,
+) -> JoinHandle<Vec<u8>> {
+    monitor_mode(stream, telemetry, true)
+}
+
+pub fn monitor_codex(
+    stream: impl Read + Send + 'static,
+    telemetry: Arc<Mutex<Telemetry>>,
+) -> JoinHandle<Vec<u8>> {
+    monitor_mode(stream, telemetry, false)
+}
+
+fn monitor_mode(
     mut stream: impl Read + Send + 'static,
     telemetry: Arc<Mutex<Telemetry>>,
+    retain_raw: bool,
 ) -> JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut captured = Vec::new();
@@ -168,7 +244,9 @@ pub fn monitor(
                 Ok(read) => read,
             };
             let room = LOG_LIMIT.saturating_sub(captured.len());
-            captured.extend_from_slice(&chunk[..read.min(room)]);
+            if retain_raw {
+                captured.extend_from_slice(&chunk[..read.min(room)]);
+            }
             for byte in &chunk[..read] {
                 if *byte == b'\n' {
                     if !discarding

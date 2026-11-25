@@ -6,18 +6,18 @@ local project/context workflow, with verified restart and multiple-process acces
 | Directive phase | Current state | Remaining work |
 | --- | --- | --- |
 | 1: foundation | Implemented | Continue extending diagnostics with new subsystems. |
-| 2: persistent runtime | Initial slice verified | Background lifecycle integration; domain entities grow with later slices. |
-| 3: MCP | Core bridge verified; persona and read-only identity tools added | Interactive host certification. |
+| 2: persistent runtime | Initial slice verified | Explicit background startup implemented; login-time lifecycle integration remains. |
+| 3: MCP | Core bridge verified; persona and read-only identity tools added | Real Codex CLI MCP path verified; interactive host certification remains. |
 | 4: continuity | Tasks, checkpoints, decisions and handoffs verified | Persona/policy/Git scopes in execution snapshots; verified tests/reviews/approvals. |
 | 5: personas | Registry, revisions, status and asserted capability gates verified | Mandatory-persona client model, notification/refresh certification, worker handoff. |
 | 6: GitHub accounts | Read-only profile verification, identity records and revocation verified with a fake `gh` | Real-account certification, repository/action scopes, credential broker, write authentication, Git push isolation. |
-| 7–9: execution/workflow | Dependency-aware leases, bounded scheduling, supervised mock processes, isolated worktrees and a fake-tested OpenCode CLI adapter verified | Real provider certification, sandboxing, tests/evidence reconciliation, authorized GitHub workflow. |
-| 10–12: TUI/hardening/release | Pending | Ratatui, cross-provider validation, packaging, release readiness. |
+| 7–9: execution/workflow | Dependency-aware leases, bounded scheduling, supervised mock/Codex processes, real Codex file task, isolated worktrees and a fake-tested optional OpenCode adapter verified | Broader provider certification, stronger isolation, tests/evidence reconciliation, authorized GitHub workflow. |
+| 10–12: TUI/hardening/release | Read-only Ratatui dashboard implemented | Governed TUI actions, cross-provider validation, packaging, release readiness. |
 
 MCP evidence: two independent rmcp clients launch separate bridge processes, use
 2025-11-25 initialize and 2026-07-28 discover lifecycles, see CLI changes, and recover
 after the runtime is killed and restarted. Setup examples are documentation-verified;
-no Codex, Claude Code, or Copilot interactive session has been executed.
+a real Codex CLI MCP session read health/projects on 2026-11-25. Interactive VS Code, Claude Code and Copilot sessions remain uncertified.
 
 Continuity evidence: decision replacement excludes historical choices from live
 context; a separate MCP client recovers an immutable handoff after restart, including
@@ -66,12 +66,12 @@ null, and reports worktree changes from a bounded Git observation. This is not a
 sandbox, independent spend meter, automatic reaper, test runner or independent
 review.
 
-Next vertical slice: owner-authorized certification with a real OpenCode model call
-and explicit spend/termination checks, followed by stronger process/worktree
-isolation and test-evidence reconciliation. Keep GitHub writes, credential brokering
-and independent review gates separate until their authorization and reconciliation
-boundaries are verified. Real-host cross-assistant certification remains required
-before claiming cross-provider continuity.
+Next vertical slice: governed task creation and execution controls in the live TUI,
+followed by worker test-evidence reconciliation and stronger isolation. The owner
+uses Codex; OpenCode remains optional and real OpenCode certification is deferred.
+Keep GitHub writes, credential brokering and independent review gates separate until
+their boundaries are verified. Real-host cross-assistant continuity remains required
+before claiming cross-provider execution. See [Codex](CODEX.md) and [TUI](TUI.md).
 
 Before optional features, complete competitive analysis as required by the directive.
 Performance targets remain targets until representative benchmarks are recorded.

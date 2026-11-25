@@ -762,10 +762,10 @@ pub(super) fn process_attach(
     require_process_owner(&value)?;
     let adapter = value["adapter"].as_str().unwrap_or("mock").to_owned();
     let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
-    let (source, reason) = if adapter == WorkerAdapter::Opencode.as_str() {
+    let (source, reason) = if adapter != WorkerAdapter::Mock.as_str() {
         (
             "provider-process",
-            "owner-run supervisor attached an OpenCode provider process",
+            "owner-run supervisor attached a provider process",
         )
     } else {
         (
@@ -866,9 +866,9 @@ pub(super) fn process_finish(
             "mock process completion must not include provider metadata".into(),
         ));
     }
-    if adapter == WorkerAdapter::Opencode.as_str() && input.provider.is_none() {
+    if adapter != WorkerAdapter::Mock.as_str() && input.provider.is_none() {
         return Err(Error::Invalid(
-            "opencode process completion requires provider metadata".into(),
+            "provider process completion requires provider metadata".into(),
         ));
     }
     let task = tasks::get(tx, value["task_id"].as_str().unwrap())?;
@@ -877,11 +877,11 @@ pub(super) fn process_finish(
     let evidence = crate::evidence::observe(&current, &criteria);
     let succeeded =
         input.outcome == WorkerProcessOutcome::Exited && input.exit_code.unwrap_or(0) == 0;
-    let (source, success_reason, failure_reason) = if adapter == WorkerAdapter::Opencode.as_str() {
+    let (source, success_reason, failure_reason) = if adapter != WorkerAdapter::Mock.as_str() {
         (
             "provider-process",
-            "OpenCode process exited successfully; host review is required before validation",
-            "OpenCode process did not exit successfully; triage before retry",
+            "Provider process exited successfully; host review is required before validation",
+            "Provider process did not exit successfully; triage before retry",
         )
     } else {
         (

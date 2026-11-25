@@ -10,6 +10,19 @@ Its goal is to make AI-assisted software development continuous, governable, and
 
 **The project remembers. The agents execute.**
 
+## Try Mother with Codex
+
+```sh
+cargo build --locked
+./target/debug/motherctl setup-codex
+./target/debug/motherctl ui
+```
+
+Use your existing Codex login. Reload the Codex VS Code session in this trusted
+project after setup. The live TUI shows real tasks, workers, file observations and
+activity; Tab changes views and q exits. See [Codex setup](docs/CODEX.md) and
+[TUI controls](docs/TUI.md). OpenCode is optional.
+
 ## Why Mother exists
 
 Coding assistants are typically organized around individual sessions. Projects, however, continue across sessions, tools, contributors, and engineering decisions.
@@ -32,7 +45,7 @@ Its long-term purpose is to coordinate what agents are responsible for, what the
 
 The current implementation includes:
 
-- A canonical local SQLite database owned by a foreground Rust service.
+- A canonical local SQLite database owned by a Rust service, with foreground and explicit background startup.
 - Shared service access from independent CLI processes through a Unix socket.
 - Project registration and persistent context records.
 - Structured engineering decisions with supersession.
@@ -41,7 +54,9 @@ The current implementation includes:
 - Dependency-aware worker execution leases with heartbeat, bounded concurrency and crash recovery.
 - A deterministic mock worker adapter that records checkpoints without editing files or auto-completing work.
 - Owner-run supervised mock processes with isolated Git worktrees, bounded logs, artifact evidence, and explicit abandoned-supervisor reconciliation.
-- A first OpenCode CLI provider adapter under the same owner-run supervisor, using the owner's host login, with explicit model, cost, step and timeout limits, bounded telemetry, and worktree observations. It is exercised with a fake `opencode` executable; no real paid model call is claimed.
+- A Codex CLI worker adapter using the existing host login, workspace-write sandbox, bounded usage metadata, timeout/step limits and retained file evidence.
+- A read-only Ratatui dashboard and project-local Codex MCP setup.
+- An optional OpenCode CLI provider adapter under the same owner-run supervisor, using the owner's host login, with explicit model, cost, step and timeout limits, bounded telemetry, and worktree observations. It is exercised with a fake `opencode` executable; no real paid model call is claimed.
 - Runtime file evidence.
 - Revision checks and idempotent writes.
 - Runtime diagnostics.
@@ -49,7 +64,7 @@ The current implementation includes:
 - Read-only verified GitHub identity records with isolated CLI profiles, persona binding, revocation, and no stored tokens.
 - An MCP stdio bridge implemented using the official Rust SDK.
 
-Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; the OpenCode provider adapter uses a fake `opencode` executable. No real GitHub account, paid coding-provider call or coding-assistant host has yet been certified.
+Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; the OpenCode provider adapter uses a fake `opencode` executable. A real Codex worker using a ChatGPT login produced a matching declared artifact, and a separate real Codex CLI client successfully read Mother through MCP. No real GitHub account or interactive VS Code session is certified.
 
 Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
 
@@ -63,11 +78,11 @@ Mother's next engineering milestones include:
 
 **GitHub identities:** Expand read-only verified account records into repository/action scopes, a credential broker, write authorization, and reconciliation without exposing tokens to agents.
 
-**Independent workers:** Expand the first OpenCode CLI adapter and verified worktree boundary into certified provider workflows, stronger isolation, test execution and independent evidence reconciliation.
+**Independent workers:** Expand the Codex and optional OpenCode adapters and verified worktree boundary into certified provider workflows, stronger isolation, test execution and independent evidence reconciliation.
 
 **Governed engineering workflows:** Assignment, implementation, validation, independent review, and human-controlled merging through GitHub.
 
-**Terminal interface:** A Rust-native CLI and interactive TUI for managing personas, projects, tasks, accounts, and execution history.
+**Terminal interface:** Extend the implemented read-only dashboard with governed task and workflow actions.
 
 ## Architectural principles
 

@@ -1,3 +1,4 @@
+mod onboarding;
 use clap::{Parser, Subcommand};
 use mother_runtime::{
     Error, Result, config,
@@ -49,6 +50,16 @@ struct Cli {
 enum Command {
     /// Initialize private configuration and database; safe to repeat offline.
     Init,
+    /// Start the canonical service in the background, initializing private state if needed.
+    Start,
+    /// Open the live terminal dashboard.
+    Ui {
+        /// Print one dashboard frame without requiring a terminal.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Connect this trusted project to Mother in Codex CLI and VS Code.
+    SetupCodex,
     /// Run the canonical local service in the foreground.
     Serve,
     /// Serve MCP over stdio, forwarding requests to the existing runtime.
@@ -465,7 +476,7 @@ enum Workers {
         max_active: u32,
         #[arg(long, default_value_t = 300)]
         timeout_seconds: u64,
-        /// OpenCode model in provider/model form; required for the opencode adapter.
+        /// Codex model name (optional), or required provider/model for OpenCode.
         #[arg(long)]
         model: Option<String>,
         /// Optional OpenCode agent name.
@@ -569,6 +580,23 @@ async fn run(cli: Cli) -> Result<bool> {
                 &serde_json::json!({"initialized":true,"data_dir":dir,"schema_version":mother_runtime::store::SCHEMA_VERSION}),
                 cli.json,
             )?;
+            Ok(true)
+        }
+        Command::Start => {
+            onboarding::start(&dir).await?;
+            output(
+                &serde_json::json!({"running":true,"data_dir":dir}),
+                cli.json,
+            )?;
+            Ok(true)
+        }
+        Command::Ui { once } => {
+            onboarding::start(&dir).await?;
+            mother_runtime::tui::run(dir, once).await?;
+            Ok(true)
+        }
+        Command::SetupCodex => {
+            onboarding::setup_codex(&dir).await?;
             Ok(true)
         }
         Command::Serve => {
@@ -1333,7 +1361,8 @@ async fn supervised_run(
     helper_exit_code: i32,
     compact: bool,
 ) -> Result<bool> {
-    let provider = adapter == WorkerAdapter::Opencode;
+    let provider = adapter != WorkerAdapter::Mock;
+    let codex = adapter == WorkerAdapter::Codex;
     if !(3..=3600).contains(&lease_seconds) {
         return Err(Error::Invalid(
             "lease_seconds must be in 3..=3600 for supervised runs".into(),
@@ -1350,7 +1379,25 @@ async fn supervised_run(
     if !(0..=255).contains(&helper_exit_code) {
         return Err(Error::Invalid("helper_exit_code must be in 0..=255".into()));
     }
-    if provider {
+    if codex {
+        if agent.is_some() || max_cost_usd.is_some() {
+            return Err(Error::Invalid("Codex uses your existing login; --agent and --max-cost-usd are unsupported (subscription usage is not dollar metered)".into()));
+        }
+        if model
+            .as_ref()
+            .is_some_and(|m| m.trim().is_empty() || m.len() > 256 || m.contains('\0'))
+            || !(1..=200).contains(&max_steps)
+            || helper_delay_ms != 100
+            || helper_exit_code != 0
+        {
+            return Err(Error::Invalid(
+                "invalid Codex model, step budget or mock-only helper options".into(),
+            ));
+        }
+        eprintln!(
+            "Codex worker uses existing host login and workspace-write sandbox; output requires host review"
+        );
+    } else if provider {
         let model = model
             .as_deref()
             .filter(|value| {
@@ -1476,9 +1523,64 @@ async fn supervised_run(
     } else {
         None
     };
-    let provider_state = provider.then(|| Arc::new(Mutex::new(provider::Telemetry::default())));
+    let provider_state = provider.then(|| {
+        Arc::new(Mutex::new(provider::Telemetry {
+            adapter: Some(adapter.as_str().into()),
+            ..Default::default()
+        }))
+    });
     let model = model.unwrap_or_default();
-    let mut command = if provider {
+    let mut command = if codex {
+        let mut command = ProcessCommand::new(
+            std::env::var_os("MOTHER_CODEX_BIN").unwrap_or_else(|| "codex".into()),
+        );
+        command
+            .args([
+                "exec",
+                "--ignore-user-config",
+                "--ephemeral",
+                "--json",
+                "--sandbox",
+                "workspace-write",
+                "-c",
+                "approval_policy=\"never\"",
+                "-c",
+                "model_provider=\"openai\"",
+                "-c",
+                "mcp_servers={}",
+            ])
+            .arg("-C")
+            .arg(&worktree);
+        if !model.is_empty() {
+            command.arg("--model").arg(&model);
+        }
+        command
+            .arg(prompt.as_deref().unwrap_or_default())
+            .env_clear();
+        for key in [
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "LANG",
+            "LC_ALL",
+            "TERM",
+            "CODEX_HOME",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command
+            .env("NO_COLOR", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "/bin/false");
+        command
+    } else if provider {
         let mut command = ProcessCommand::new(provider_executable());
         command
             .arg("run")
@@ -1540,13 +1642,25 @@ async fn supervised_run(
     };
     let process_group = child.id();
     let stdout = match provider_state.clone() {
-        Some(state) => child
-            .stdout
-            .take()
-            .map(|stream| provider::monitor(stream, state)),
+        Some(state) => child.stdout.take().map(|stream| {
+            if codex {
+                provider::monitor_codex(stream, state)
+            } else {
+                provider::monitor(stream, state)
+            }
+        }),
         None => child.stdout.take().map(capture),
     };
-    let stderr = child.stderr.take().map(capture);
+    let stderr = child.stderr.take().map(|stream| {
+        if codex {
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut { stream }, &mut std::io::sink());
+                Vec::new()
+            })
+        } else {
+            capture(stream)
+        }
+    });
     let attached = match request_result(
         dir,
         Operation::WorkerProcessAttach(WorkerProcessAttachInput {
@@ -1573,9 +1687,11 @@ async fn supervised_run(
     let status = loop {
         if let Some(state) = &provider_state {
             let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
-            if telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
+            if !codex && telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
                 budget_reason = Some("cost");
-            } else if telemetry.steps > u64::from(max_steps) {
+            } else if telemetry.steps > u64::from(max_steps)
+                || (codex && telemetry.tool_calls > u64::from(max_steps))
+            {
                 budget_reason = Some("steps");
             }
         }
@@ -1663,15 +1779,22 @@ async fn supervised_run(
     }
     if let Some(state) = &provider_state {
         let telemetry = state.lock().unwrap_or_else(|error| error.into_inner());
-        if telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
+        if !codex && telemetry.cost_usd > max_cost_usd.unwrap_or(0.0) {
             budget_reason = Some("cost");
-        } else if telemetry.steps > u64::from(max_steps) {
+        } else if telemetry.steps > u64::from(max_steps)
+            || (codex && telemetry.tool_calls > u64::from(max_steps))
+        {
             budget_reason = Some("steps");
         }
     }
+    let codex_failed = codex
+        && provider_state.as_ref().is_none_or(|s| {
+            let t = s.lock().unwrap_or_else(|e| e.into_inner());
+            !t.completed || t.failed
+        });
     let outcome = if budget_reason.is_some() {
         WorkerProcessOutcome::Killed
-    } else if status.success() {
+    } else if status.success() && !codex_failed {
         WorkerProcessOutcome::Exited
     } else if status.code().is_some() {
         WorkerProcessOutcome::Failed

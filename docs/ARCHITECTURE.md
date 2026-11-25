@@ -11,7 +11,7 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
 - `personas`: typed persona definitions, statuses, capabilities and authorization claims.
 - `github`: typed read-only GitHub identity records and the fixed `gh api user` verifier.
 - `workers`: typed execution-lease adapter, workspace and process inputs, statuses, outcomes and limits.
-- `provider`: bounded OpenCode CLI JSON telemetry and process-output monitoring.
+- `provider`: bounded Codex/OpenCode CLI JSON accounting telemetry and process-output monitoring.
 - `evidence`: bounded descriptor-relative repository file observations.
 - `store/tasks`: task/dependency persistence, immutable checkpoints/transitions,
   optimistic revisions, and local file-contract completion gates.
@@ -27,7 +27,9 @@ and the `motherctl` executable. Modules exist only for implemented responsibilit
   and bounded artifact evidence.
 - `runtime`: Unix socket server/client, connection limits, lifecycle, diagnostics.
 - `mcp`: official rmcp SDK stdio bridge, typed tool schemas, resources, lazy IPC.
-- `main`: Clap command grammar and JSON presentation.
+- `tui`: read-only Ratatui dashboard, background IPC polling and bounded list pagination.
+- `onboarding` (binary module): explicit background startup and non-destructive project-local Codex MCP setup.
+- `main`: Clap command grammar, supervisor and JSON presentation.
 
 `motherctl` clients → private Unix socket → runtime → serialized SQLite connection.
 
@@ -49,7 +51,7 @@ The owner-run CLI may invoke one fixed read-only `gh api user` verification comm
 the runtime itself does not execute GitHub commands. Worker lease operations are
 SQLite coordination: the runtime does not launch, supervise or signal processes.
 The separate owner-run `workers run` command creates a detached Git worktree and
-supervises either the deterministic mock helper or an OpenCode CLI process in its own
+supervises the deterministic mock helper, Codex, or an OpenCode CLI process in its own
 process group. The OpenCode adapter uses a documented non-interactive JSON interface,
 host provider login, an isolated OpenCode configuration, explicit cost/step/timeout
 limits and bounded telemetry. It is not a sandbox or credential broker.
@@ -109,3 +111,9 @@ Lists cap both item count and approximately 1 MiB of serialized item data. Curso
 advance only to the final returned item, so byte-limited pages do not lose records.
 Snapshot selection reads the latest records directly before applying its own
 smaller byte budget, rather than inheriting a truncated list prefix.
+
+Schema 10 preserves the worker execution graph while allowing `codex`. Codex workers
+request workspace-write sandboxing, ignore user configuration, retain host-managed
+authentication, disable worker MCP servers and discard raw provider output. The TUI
+and setup client use the same IPC boundary; only the service writes canonical state.
+See [ADR 0010](DECISIONS/0010-codex-and-terminal-dashboard.md).
