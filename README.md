@@ -1,16 +1,50 @@
 # Mother Runtime
 
-**By TFRI**
+Mother Runtime is a local Rust service for coordinating AI coding agents and storing
+project state across sessions. It maintains project context, engineering decisions,
+persona definitions, tasks, dependencies, checkpoints and worker execution records
+in SQLite. Coding assistants access that state through Model Context Protocol (MCP).
+A CLI and terminal dashboard connect to the same service.
 
-*A persistent engineering control plane for AI coding agents.*
+## What it does
 
-Mother Runtime is an open-source, Rust-native orchestration system designed to coordinate engineering work across AI coding assistants, agent personas, and independently authorized GitHub identities.
+- Records project context and decisions, including the rationale and decisions they replace.
+- Tracks tasks through explicit states, with dependencies, revision checks and checkpoints.
+- Creates hashed handoff packages containing project state and outstanding work for another session.
+- Stores versioned personas with responsibilities and declared capabilities.
+- Runs Codex workers in separate Git worktrees, with execution leases, heartbeats,
+  timeout limits and file observations.
+- Displays tasks, workers, personas, handoffs, GitHub identity metadata and activity
+  in a read-only Ratatui dashboard.
 
-Its goal is to make AI-assisted software development continuous, governable, and accountable—even when developers switch between Codex, Claude Code, GitHub Copilot, or other supported coding tools.
+Codex workers use the existing host login. Mock and OpenCode adapters are also
+available. GitHub integration currently supports read-only identity verification
+and persona bindings.
 
-**The project remembers. The agents execute.**
+## How it works
 
-## Try Mother with Codex
+One service owns the database and serializes state changes. CLI and TUI clients
+connect through a private Unix socket. Each MCP client starts a lightweight stdio
+bridge that forwards requests to that same service.
+
+Mutations use revision checks and idempotency keys. State changes, audit events and
+retry responses commit in a single transaction. Project records persist independently
+of coding-assistant sessions; continuity uses explicitly recorded context and
+checkpoints rather than importing conversation history.
+
+Worker execution is an explicit CLI operation. The supervisor leases a ready task,
+creates a detached worktree from the repository's current commit, starts the selected
+coding agent and records its outcome. For Codex, it requests the `workspace-write`
+sandbox and retains usage metadata and file observations while discarding raw model
+output. A successful run leaves the task `awaiting_input` and preserves the worktree
+for inspection. It does not automatically complete the task.
+
+## Build and run
+
+Requires Rust 1.97 or newer on macOS or Linux. Worker execution requires Git and the
+selected coding-agent CLI. To use Codex, sign in through Codex first.
+
+From the repository root:
 
 ```sh
 cargo build --locked
@@ -18,92 +52,32 @@ cargo build --locked
 ./target/debug/motherctl ui
 ```
 
-Use your existing Codex login. Reload the Codex VS Code session in this trusted
-project after setup. The live TUI shows real tasks, workers, file observations and
-activity; Tab changes views and q exits. See [Codex setup](docs/CODEX.md) and
-[TUI controls](docs/TUI.md). OpenCode is optional.
+`setup-codex` starts Mother, registers the current project and adds its MCP server
+to the project's `.codex/config.toml`. Reload the Codex VS Code session in the trusted
+project to load the tools. The default runtime directory is `~/.mother`.
 
-## Why Mother exists
+In the dashboard, use Tab to switch views, Up and Down to select records, and q to
+quit. Task creation and state changes use the CLI or MCP; worker startup uses the CLI.
+See [Codex setup](docs/CODEX.md), [CLI commands](docs/CLI.md) and
+[TUI controls](docs/TUI.md).
 
-Coding assistants are typically organized around individual sessions. Projects, however, continue across sessions, tools, contributors, and engineering decisions.
+## Current scope
 
-Mother is designed to provide a durable coordination layer that preserves:
+Mother is under active development. A real Codex worker has produced a file matching
+its declared SHA-256 contract, and a real Codex CLI client has queried Mother through
+MCP. Interactive VS Code integration and cross-assistant continuation have not yet
+been verified end to end.
 
-- Project state, technical context, and architectural decisions.
-- Engineering responsibilities and versioned agent configurations.
-- Task ownership, dependencies, checkpoints, and execution history.
-- Verified deliverables, GitHub artifacts, and review outcomes.
-- Context needed to continue work through a different coding assistant.
+File observations verify content against task contracts. Automated test execution,
+independent review, human approval records and GitHub write workflows are not yet
+implemented. Persona capability checks apply when clients supply a persona claim;
+authenticated persona enforcement is pending. Local clients share the authority of
+the operating-system user.
 
-Mother is not intended to replace existing coding agents or become another general-purpose conversational memory tool.
+See [architecture](docs/ARCHITECTURE.md), [security](docs/SECURITY.md),
+[roadmap](docs/ROADMAP.md) and [development status](development-status.toml) for
+implementation details and remaining work.
 
-Its long-term purpose is to coordinate what agents are responsible for, what they are authorized to do, what work has been verified, and what should happen next.
+## License
 
-## Current development status
-
-**Early development — persistent runtime foundation implemented; governed agent orchestration remains in development.**
-
-The current implementation includes:
-
-- A canonical local SQLite database owned by a Rust service, with foreground and explicit background startup.
-- Shared service access from independent CLI processes through a Unix socket.
-- Project registration and persistent context records.
-- Structured engineering decisions with supersession.
-- Hashed handoff packages and one-time continuation claims.
-- Durable host-tracked tasks and checkpoints.
-- Dependency-aware worker execution leases with heartbeat, bounded concurrency and crash recovery.
-- A deterministic mock worker adapter that records checkpoints without editing files or auto-completing work.
-- Owner-run supervised mock processes with isolated Git worktrees, bounded logs, artifact evidence, and explicit abandoned-supervisor reconciliation.
-- A Codex CLI worker adapter using the existing host login, workspace-write sandbox, bounded usage metadata, timeout/step limits and retained file evidence.
-- A read-only Ratatui dashboard and project-local Codex MCP setup.
-- An optional OpenCode CLI provider adapter under the same owner-run supervisor, using the owner's host login, with explicit model, cost, step and timeout limits, bounded telemetry, and worktree observations. It is exercised with a fake `opencode` executable; no real paid model call is claimed.
-- Runtime file evidence.
-- Revision checks and idempotent writes.
-- Runtime diagnostics.
-- Versioned personas with immutable history and runtime capability checks for asserted task operations.
-- Read-only verified GitHub identity records with isolated CLI profiles, persona binding, revocation, and no stored tokens.
-- An MCP stdio bridge implemented using the official Rust SDK.
-
-Two MCP protocol lifecycles have been tested using SDK clients. Persona policy updates have been exercised across independent CLI/MCP clients. GitHub identity verification uses a fake `gh` in tests; the OpenCode provider adapter uses a fake `opencode` executable. A real Codex worker using a ChatGPT login produced a matching declared artifact, and a separate real Codex CLI client successfully read Mother through MCP. No real GitHub account or interactive VS Code session is certified.
-
-Interactive coding-assistant sessions and cross-provider continuation have not yet been certified end to end.
-
-## Planned orchestration capabilities
-
-Mother's next engineering milestones include:
-
-**Persistent personas:** Expand the verified registry into mandatory authenticated adoption, execution policies, and live client notifications.
-
-**Cross-assistant continuity:** Verified retrieval and continuation of engineering state across supported coding clients.
-
-**GitHub identities:** Expand read-only verified account records into repository/action scopes, a credential broker, write authorization, and reconciliation without exposing tokens to agents.
-
-**Independent workers:** Expand the Codex and optional OpenCode adapters and verified worktree boundary into certified provider workflows, stronger isolation, test execution and independent evidence reconciliation.
-
-**Governed engineering workflows:** Assignment, implementation, validation, independent review, and human-controlled merging through GitHub.
-
-**Terminal interface:** Extend the implemented read-only dashboard with governed task and workflow actions.
-
-## Architectural principles
-
-- **Provider-independent:** Coding assistants are interchangeable clients, not owners of canonical project state.
-- **Local-first:** Project coordination state is controlled by the local runtime.
-- **Persistent:** Tasks, decisions, and handoffs survive ordinary session termination.
-- **Policy-governed:** Operational permissions must be enforced by the runtime, not merely described in prompts.
-- **Identity-aware:** Automated GitHub actions must be attributable to the correctly authorized account.
-- **Evidence-based:** Completion claims should be supported by verifiable artifacts.
-- **Rust-native:** Core execution, persistence, orchestration, and terminal interfaces are implemented in Rust.
-
-## Project maturity
-
-Mother Runtime is under active development and is not yet a production-ready autonomous engineering orchestrator.
-
-The current foundation should not be interpreted as proof that certified provider-backed independent workers, account-isolated GitHub automation, or end-to-end multi-agent review workflows are already available. The OpenCode adapter is implemented but has not been certified with a real model call.
-
-See the development status, architecture, security documentation, and roadmap for verified capabilities and ongoing work.
-
-## Open source
-
-Mother Runtime is developed by **TFRI**.
-
-License: Apache-2.0, subject to the repository containing the corresponding license and package metadata.
+[Apache License 2.0](LICENSE).
